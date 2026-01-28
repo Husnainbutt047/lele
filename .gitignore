@@ -10,3 +10,5 @@ Cargo.lock
 *.tokens.txt
 /.venv
 /*.wav
+*.stacks
+*_profile.json

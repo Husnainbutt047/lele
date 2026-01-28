@@ -47,22 +47,77 @@ pub fn conv1d<'b, 'a>(
     let unfolded_rows = in_channels_per_group * kernel_size;
     let unfolded_size = unfolded_rows * output_len;
     let mut unfolded = vec![0.0; unfolded_size];
+
+    // Fast path: stride=1, dilation=1, no padding - direct memory layout
+    let is_fast_path =
+        stride == 1 && dilation == 1 && pad_left == 0 && pad_right == 0 && kernel_size == 1;
+
     for b in 0..batch_size {
         for g in 0..group as usize {
-            unfolded.fill(0.0);
             let in_group_offset = (b * in_channels + g * in_channels_per_group) * input_len;
-            for ic in 0..in_channels_per_group {
-                let in_row_offset = in_group_offset + ic * input_len;
-                let in_data = &input.data[in_row_offset..in_row_offset + input_len];
-                for k in 0..kernel_size {
-                    let k_offset = k * dilation;
-                    let unfolded_row_idx = ic * kernel_size + k;
-                    let unfolded_row_offset = unfolded_row_idx * output_len;
-                    for t_out in 0..output_len {
-                        let t_in =
-                            (t_out * stride) as isize - pad_left as isize + k_offset as isize;
-                        if t_in >= 0 && (t_in as usize) < input_len {
-                            unfolded[unfolded_row_offset + t_out] = in_data[t_in as usize];
+
+            if is_fast_path {
+                // Fast path: kernel_size=1, no padding, stride=1
+                // Direct copy without im2col overhead
+                let src_offset = in_group_offset;
+                let copy_len = in_channels_per_group * input_len;
+                unfolded[..copy_len]
+                    .copy_from_slice(&input.data[src_offset..src_offset + copy_len]);
+            } else {
+                // Standard im2col path with optimizations
+                // Only zero out what we need
+                if pad_left > 0 || pad_right > 0 || dilation > 1 {
+                    unfolded.fill(0.0);
+                }
+
+                for ic in 0..in_channels_per_group {
+                    let in_row_offset = in_group_offset + ic * input_len;
+                    let in_data = &input.data[in_row_offset..in_row_offset + input_len];
+
+                    for k in 0..kernel_size {
+                        let k_offset = k * dilation;
+                        let unfolded_row_idx = ic * kernel_size + k;
+                        let unfolded_row_offset = unfolded_row_idx * output_len;
+
+                        // Optimize: calculate valid range to avoid per-element bounds checking
+                        let first_valid_out = if pad_left > k_offset {
+                            ((pad_left - k_offset + stride - 1) / stride).max(0)
+                        } else {
+                            0
+                        };
+                        let last_valid_out = ((input_len + pad_left - k_offset + stride - 1)
+                            / stride)
+                            .min(output_len);
+
+                        if first_valid_out < last_valid_out {
+                            let unf_ptr = unfolded.as_mut_ptr();
+                            let in_ptr = in_data.as_ptr();
+
+                            if stride == 1 && pad_left == 0 {
+                                // Contiguous copy for stride=1, no padding
+                                let src_start = k_offset;
+                                let dst_start = unfolded_row_offset;
+                                let copy_len = (input_len - k_offset).min(output_len);
+                                unsafe {
+                                    std::ptr::copy_nonoverlapping(
+                                        in_ptr.add(src_start),
+                                        unf_ptr.add(dst_start),
+                                        copy_len,
+                                    );
+                                }
+                            } else {
+                                // Strided copy
+                                for t_out in first_valid_out..last_valid_out {
+                                    let t_in = (t_out * stride) as isize - pad_left as isize
+                                        + k_offset as isize;
+                                    if t_in >= 0 && (t_in as usize) < input_len {
+                                        unsafe {
+                                            *unf_ptr.add(unfolded_row_offset + t_out) =
+                                                *in_ptr.add(t_in as usize);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -90,17 +145,25 @@ pub fn conv1d<'b, 'a>(
             }
         }
     }
+
+    // Optimized bias addition with SIMD-friendly loop
     if let Some(b_vec) = bias {
+        let out_ptr = out.as_mut_ptr();
         for b in 0..batch_size {
             for oc in 0..out_channels {
                 let start = (b * out_channels + oc) * output_len;
                 let b_val = b_vec.data[oc];
-                for i in 0..output_len {
-                    out[start + i] += b_val;
+
+                // Vectorizable loop - compiler can auto-vectorize this
+                unsafe {
+                    for i in 0..output_len {
+                        *out_ptr.add(start + i) += b_val;
+                    }
                 }
             }
         }
     }
+
     TensorView::from_slice(out, vec![batch_size, out_channels, output_len])
 }
 #[cfg(test)]

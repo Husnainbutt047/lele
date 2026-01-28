@@ -69,6 +69,46 @@ pub fn slice<'b, 'a>(
     steps: &[i64],
     out: &'a mut Vec<f32>,
 ) -> TensorView<'a> {
+    // Fast path: simple contiguous slice along first dimension
+    // This handles the most common case: slicing rows of a 2D tensor
+    if !axes.is_empty() && axes.len() == 1 && steps.is_empty() {
+        let axis = if axes[0] < 0 {
+            (input.dim() as i64 + axes[0]) as usize
+        } else {
+            axes[0] as usize
+        };
+
+        if axis == 0 && starts.len() == 1 && ends.len() == 1 {
+            let dim_size = input.shape[0] as i64;
+            let start = if starts[0] < 0 {
+                (starts[0] + dim_size).max(0) as usize
+            } else {
+                starts[0].min(dim_size).max(0) as usize
+            };
+            let end = if ends[0] < 0 {
+                (ends[0] + dim_size).max(0) as usize
+            } else if ends[0] > 2_000_000_000 {
+                dim_size as usize
+            } else {
+                ends[0].min(dim_size).max(0) as usize
+            };
+
+            if end > start {
+                let stride: usize = input.shape[1..].iter().product();
+                let start_offset = start * stride;
+                let end_offset = end * stride;
+
+                out.clear();
+                out.extend_from_slice(&input.data[start_offset..end_offset]);
+
+                let mut out_shape = input.shape.to_vec();
+                out_shape[0] = end - start;
+                return TensorView::from_slice(out, out_shape);
+            }
+        }
+    }
+
+    // Standard path: complex multi-dimensional slicing
     let ndim = input.dim();
     let num_ops = starts.len();
     let mut actual_starts = vec![0isize; ndim];
