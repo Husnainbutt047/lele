@@ -730,7 +730,10 @@ pub fn expand<'b, 'a>(
         } else if dim_target == 1 {
             out_shape[i] = dim_in;
         } else {
-            panic!("Expand: incompatible dimensions at dim index {} (from left): in={} target={}. Full shapes: in={:?} target={:?}", i, dim_in, dim_target, input_shape, target_shape_vec);
+            panic!(
+                "Expand: incompatible dimensions at dim index {} (from left): in={} target={}. Full shapes: in={:?} target={:?}",
+                i, dim_in, dim_target, input_shape, target_shape_vec
+            );
         }
     }
     let numel: usize = out_shape.iter().product();

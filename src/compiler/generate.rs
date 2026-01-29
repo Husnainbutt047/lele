@@ -1,4 +1,4 @@
-use super::{sanitize_name, Allocator, AnalysisData, Compiler};
+use super::{Allocator, AnalysisData, Compiler, sanitize_name};
 use crate::model::onnx_proto::{NodeProto, ValueInfoProto};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -116,7 +116,7 @@ pub(crate) fn generate_partitioned_graph<W: Write>(
         }
         let mut chunk_inputs: Vec<String> = chunk_inputs_set.into_iter().collect();
         chunk_inputs.sort(); // Deterministic order
-                             // 2. Identify Outputs: Live AFTER chunk
+        // 2. Identify Outputs: Live AFTER chunk
         let chunk_end_id = *current_id + nodes_count;
         let global_outputs: HashSet<String> =
             graph_outputs.iter().map(|o| o.name.clone()).collect();

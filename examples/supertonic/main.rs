@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use audio::WavWriter;
 use config::{Config, VoiceStyleData};
 use lele::tensor::TensorView;
-use processor::{chunk_text, sample_noisy_latent, UnicodeProcessor};
+use processor::{UnicodeProcessor, chunk_text, sample_noisy_latent};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};

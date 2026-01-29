@@ -176,17 +176,9 @@ pub fn slice<'b, 'a>(
         let end = ends[i] as isize;
         let norm_start = if start < 0 { start + dim_size } else { start };
         let norm_end = if end > 2_000_000_000 {
-            if step > 0 {
-                dim_size
-            } else {
-                -1
-            }
+            if step > 0 { dim_size } else { -1 }
         } else if end < -2_000_000_000 {
-            if step > 0 {
-                0
-            } else {
-                -1
-            }
+            if step > 0 { 0 } else { -1 }
         } else if end < 0 {
             end + dim_size
         } else {

@@ -1,4 +1,4 @@
-use crate::features::{hann_window, log_compress, Lfr, LfrConfig, RealFft, SparseMelBank};
+use crate::features::{Lfr, LfrConfig, RealFft, SparseMelBank, hann_window, log_compress};
 use crate::tensor::TensorView;
 use rustfft::num_complex::Complex;
 use std::simd::prelude::*;

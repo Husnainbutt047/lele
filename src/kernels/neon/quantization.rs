@@ -9,7 +9,7 @@ use core::arch::asm;
 
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-unsafe fn vdotq_u32_custom(mut acc: uint32x4_t, a: uint8x16_t, b: uint8x16_t) -> uint32x4_t {
+unsafe fn vdotq_u32_custom(mut acc: uint32x4_t, a: uint8x16_t, b: uint8x16_t) -> uint32x4_t { unsafe {
     asm!(
         "udot {acc:v}.4s, {a:v}.16b, {b:v}.16b",
         acc = inout(vreg) acc,
@@ -18,7 +18,7 @@ unsafe fn vdotq_u32_custom(mut acc: uint32x4_t, a: uint8x16_t, b: uint8x16_t) ->
         options(nostack)
     );
     acc
-}
+}}
 
 pub fn dynamic_quantize_linear<'a, 'b>(
     x: &TensorView<'b, f32>,
@@ -93,7 +93,7 @@ pub fn dynamic_quantize_linear_u8<'a, 'b>(
     // Ensure enough capacity: 1 f32 = 4 u8.
     let cap_bytes = out_y_storage.capacity() * 4;
     if cap_bytes < len {
-        out_y_storage.reserve((len + 3) / 4);
+        out_y_storage.reserve(len.div_ceil(4));
     }
 
     // IMPORTANT: This reuses the memory of a Vec<f32> to store u8.
@@ -337,7 +337,7 @@ pub fn mat_mul_integer_u8<'a, 'b, 'c>(
         let mut j = 0;
         while j + 16 <= n {
             // Pack B for this strip of 16 columns.
-            let k_aligned = (k + 3) / 4 * 4;
+            let k_aligned = k.div_ceil(4) * 4;
             let mut packed_b = vec![0u8; k_aligned * 16];
 
             unsafe {

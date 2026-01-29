@@ -1,7 +1,19 @@
 [package]
 name = "lele"
 version = "0.1.2"
-edition = "2021"
+edition = "2024"
+description = "Bare-metal machine learning inference library in Rust"
+license = "MIT"
+repository = "https://github.com/miuda-ai/lele"
+authors = ["jinti <shenjindi@miuda.ai>"]
+keywords = [
+    "machine-learning",
+    "inference",
+    "onnx",
+    "speech-synthesis",
+    "text-to-speech",
+]
+categories = ["algorithms", "compilers"]
 
 [dependencies]
 prost = "0.13"

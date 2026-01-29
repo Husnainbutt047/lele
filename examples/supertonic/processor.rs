@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use rand_distr::{Distribution, Normal};
 use regex::Regex;
 use std::fs::File;

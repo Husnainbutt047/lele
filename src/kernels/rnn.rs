@@ -1,8 +1,8 @@
 use crate::kernels::activations::{sigmoid, tanh};
 use crate::tensor::TensorView;
+use faer::Parallelism;
 use faer::linalg::matmul::matmul;
 use faer::mat::{from_raw_parts, from_raw_parts_mut};
-use faer::Parallelism;
 
 pub fn lstm<'b, 'a>(
     input: &TensorView<'b>,

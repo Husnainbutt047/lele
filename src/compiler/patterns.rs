@@ -1,4 +1,4 @@
-use super::{sanitize_name, Pattern};
+use super::{Pattern, sanitize_name};
 use crate::model::onnx_proto::NodeProto;
 
 pub fn get_default_patterns() -> Vec<Pattern> {

@@ -1,8 +1,8 @@
 use crate::kernels::utils;
 use crate::tensor::TensorView;
+use faer::Parallelism;
 use faer::linalg::matmul::matmul as faer_matmul;
 use faer::mat::{from_raw_parts, from_raw_parts_mut};
-use faer::Parallelism;
 use std::borrow::Cow;
 
 pub fn matmul<'a>(

@@ -1,8 +1,8 @@
 use crate::kernels::utils;
 use crate::tensor::TensorView;
 use std::borrow::Cow;
-use std::simd::prelude::*;
 use std::simd::StdFloat;
+use std::simd::prelude::*;
 
 #[inline(always)]
 pub(crate) fn simd_exp(x: f32x4) -> f32x4 {

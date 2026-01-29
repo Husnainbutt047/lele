@@ -1,5 +1,5 @@
 use approx::assert_abs_diff_eq;
-use lele::features::{hann_window, RealFft};
+use lele::features::{RealFft, hann_window};
 use rustfft::num_complex::Complex;
 
 #[test]

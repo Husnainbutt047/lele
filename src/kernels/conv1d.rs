@@ -1,9 +1,9 @@
 use crate::kernels::utils;
 use crate::tensor::TensorView;
 use faer::{
+    Parallelism,
     linalg::matmul::matmul,
     mat::{from_raw_parts, from_raw_parts_mut},
-    Parallelism,
 };
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::*;
@@ -25,7 +25,7 @@ unsafe fn conv1d_direct_k3_t4_oc4_neon(
     input: *const f32,
     weights: *const f32,
     output: *mut f32,
-) {
+) { unsafe {
     let w_stride_oc = in_channels * 3;
     let in_stride_ch = input_len;
     let out_stride_ch = output_len;
@@ -795,7 +795,7 @@ unsafe fn conv1d_direct_k3_t4_oc4_neon(
         // Remainder OC Loop... (If OutChannels not div by 4)
         // Silero OCs are 64, 128. Always div by 4.
     }
-}
+}}
 
 pub fn conv1d<'b, 'a>(
     input: &TensorView<'b>,
@@ -944,7 +944,7 @@ pub fn conv1d_fused<'b, 'a>(
     let unfolded_size = unfolded_rows * output_len;
 
     thread_local! {
-        static SCRATCH: std::cell::RefCell<Vec<f32>> = std::cell::RefCell::new(Vec::new());
+        static SCRATCH: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) };
     }
 
     SCRATCH.with(|scratch_cell| {
@@ -979,12 +979,11 @@ pub fn conv1d_fused<'b, 'a>(
 
                             // Optimize: calculate valid range to avoid per-element bounds checking
                             let first_valid_out = if pad_left > k_offset {
-                                ((pad_left - k_offset + stride - 1) / stride).max(0)
+                                (pad_left - k_offset).div_ceil(stride).max(0)
                             } else {
                                 0
                             };
-                            let last_valid_out = ((input_len + pad_left - k_offset + stride - 1)
-                                / stride)
+                            let last_valid_out = (input_len + pad_left - k_offset).div_ceil(stride)
                                 .min(output_len);
 
                             if first_valid_out < last_valid_out {
