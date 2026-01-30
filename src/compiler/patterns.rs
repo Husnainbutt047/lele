@@ -188,7 +188,7 @@ pub fn get_default_patterns() -> Vec<Pattern> {
                 }
                 Some(7)
             }),
-            generator: Box::new(|nodes, weights, allocator, w, indent| {
+            generator: Box::new(|nodes, weights, _allocator, w, indent| {
                 let input = sanitize_name(&nodes[0].input[0]);
                 let get_weight = |name: &str| -> String {
                     let s = sanitize_name(name);

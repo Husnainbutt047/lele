@@ -388,6 +388,10 @@ pub(crate) fn generate_nodes(
         }
 
         // 3. Fallback
+        eprintln!(
+            "Warning: Unrecognized operator '{}' (node: {})",
+            op, node.name
+        );
         for (idx, out_name) in outputs.iter().enumerate() {
             writeln!(
                 w,
