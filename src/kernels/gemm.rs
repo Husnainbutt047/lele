@@ -1,9 +1,12 @@
 use crate::kernels::utils;
 use crate::tensor::TensorView;
-use faer::Parallelism;
+use faer::{Accum, Par};
 use faer::linalg::matmul::matmul as faer_matmul;
-use faer::mat::{from_raw_parts, from_raw_parts_mut};
+use faer::mat::{MatRef, MatMut};
 use std::borrow::Cow;
+
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
 
 pub fn matmul<'a>(
     a: &TensorView<'_>,
@@ -51,9 +54,9 @@ pub fn matmul<'a>(
         let out_offset = b_i * stride_out;
 
         unsafe {
-            let a_mat = from_raw_parts::<f32>(a.data.as_ptr().add(a_offset), m, k, k as isize, 1);
-            let b_mat = from_raw_parts::<f32>(b.data.as_ptr().add(b_offset), k, n, n as isize, 1);
-            let out_mat = from_raw_parts_mut::<f32>(
+            let a_mat = MatRef::<f32>::from_raw_parts(a.data.as_ptr().add(a_offset), m, k, k as isize, 1);
+            let b_mat = MatRef::<f32>::from_raw_parts(b.data.as_ptr().add(b_offset), k, n, n as isize, 1);
+            let out_mat = MatMut::<f32>::from_raw_parts_mut(
                 out_slice.as_mut_ptr().add(out_offset),
                 m,
                 n,
@@ -61,7 +64,7 @@ pub fn matmul<'a>(
                 1,
             );
 
-            faer_matmul(out_mat, a_mat, b_mat, None, 1.0, Parallelism::None);
+            faer_matmul(out_mat, Accum::Replace, a_mat, b_mat, 1.0, Par::Seq);
         }
     }
     TensorView {
@@ -81,9 +84,10 @@ pub fn matmul_fused_add<'a>(
     let bias_data = &bias.data;
     let out_slice = unsafe { std::slice::from_raw_parts_mut(view.data.as_ptr() as *mut f32, len) };
     if bias_data.len() == n {
-        for i in 0..len {
-            unsafe {
-                *out_slice.get_unchecked_mut(i) += *bias_data.get_unchecked(i % n);
+        // Optimized broadcasting loop (row-wise) to avoid expensive modulo
+        for chunk in out_slice.chunks_exact_mut(n) {
+            for (x, &b) in chunk.iter_mut().zip(bias_data.iter()) {
+                *x += b;
             }
         }
     } else if bias_data.len() == 1 {
@@ -176,9 +180,9 @@ pub fn gemm<'a>(
     let rsb = if trans_b { 1 } else { n as isize };
     let csb = if trans_b { k as isize } else { 1 };
     unsafe {
-        let a_mat = from_raw_parts::<f32>(a.data.as_ptr(), m, k, rsa, csa);
-        let b_mat = from_raw_parts::<f32>(b.data.as_ptr(), k, n, rsb, csb);
-        let out_mat = from_raw_parts_mut::<f32>(out_buf.as_mut_ptr(), m, n, n as isize, 1);
+        let a_mat = MatRef::<f32>::from_raw_parts(a.data.as_ptr(), m, k, rsa, csa);
+        let b_mat = MatRef::<f32>::from_raw_parts(b.data.as_ptr(), k, n, rsb, csb);
+        let out_mat = MatMut::<f32>::from_raw_parts_mut(out_buf.as_mut_ptr(), m, n, n as isize, 1);
 
         // if use beta (=1.0 usually), we need accumulation to be Some(1.0).
         // However, here we already filled out_buf with C*beta.
@@ -188,11 +192,11 @@ pub fn gemm<'a>(
 
         faer_matmul(
             out_mat,
+            Accum::Add, // accumulate into existing content
             a_mat,
             b_mat,
-            Some(1.0), // beta=1.0, means accumulate into existing content
             alpha,
-            Parallelism::None,
+            Par::Seq,
         );
     }
 

@@ -8,31 +8,65 @@ pub(crate) fn handle_tensor_ops(ctx: &mut OpContext, w: &mut dyn Write) -> std::
     let outputs = &ctx.outputs;
     let buf_expr = &ctx.buf_expr;
 
-    let resolve_i64 = |idx: usize, ctx: &OpContext| -> String {
-        if idx >= ctx.node.input.len() || ctx.node.input[idx].is_empty() {
-            "&[]".to_string()
-        } else {
+    // Helper to resolve i64 values from inputs
+    // Returns the expression and whether a temp variable was created
+    let resolve_i64_with_temp =
+        |idx: usize, ctx: &OpContext, w: &mut dyn Write, tab: &str| -> std::io::Result<String> {
+            if idx >= ctx.node.input.len() || ctx.node.input[idx].is_empty() {
+                return Ok("&[]".to_string());
+            }
             let name = &ctx.node.input[idx];
             if let Some((ints, _)) = ctx.int64_map.get(name) {
-                format!("&{:?}", ints)
+                Ok(format!("&{:?}", ints))
             } else {
-                format!("&lele::kernels::to_i64_vec(&{})", ctx.inputs[idx])
+                let is_i64 = ctx
+                    .var_types
+                    .get(&ctx.inputs[idx])
+                    .map(|t| t == "i64")
+                    .unwrap_or(false);
+                if is_i64 {
+                    // For i64 tensors, use .data directly
+                    Ok(format!("&{}.data[..]", ctx.inputs[idx]))
+                } else {
+                    // Need to convert to i64
+                    let temp_name = format!("temp_i64_{}", idx);
+                    writeln!(
+                        w,
+                        "{}let {} = lele::kernels::to_i64_vec(&{});",
+                        tab, temp_name, ctx.inputs[idx]
+                    )?;
+                    Ok(format!("&{}", temp_name))
+                }
             }
-        }
-    };
+        };
 
-    let resolve_i64_opt = |idx: usize, ctx: &OpContext| -> String {
-        if idx >= ctx.node.input.len() || ctx.node.input[idx].is_empty() {
-            "None".to_string()
-        } else {
+    let resolve_i64_opt_with_temp =
+        |idx: usize, ctx: &OpContext, w: &mut dyn Write, tab: &str| -> std::io::Result<String> {
+            if idx >= ctx.node.input.len() || ctx.node.input[idx].is_empty() {
+                return Ok("None".to_string());
+            }
             let name = &ctx.node.input[idx];
             if let Some((ints, _)) = ctx.int64_map.get(name) {
-                format!("Some(&{:?})", ints)
+                Ok(format!("Some(&{:?})", ints))
             } else {
-                format!("Some(&lele::kernels::to_i64_vec(&{}))", ctx.inputs[idx])
+                let is_i64 = ctx
+                    .var_types
+                    .get(&ctx.inputs[idx])
+                    .map(|t| t == "i64")
+                    .unwrap_or(false);
+                if is_i64 {
+                    Ok(format!("Some(&{}.data[..])", ctx.inputs[idx]))
+                } else {
+                    let temp_name = format!("temp_i64_{}", idx);
+                    writeln!(
+                        w,
+                        "{}let {} = lele::kernels::to_i64_vec(&{});",
+                        tab, temp_name, ctx.inputs[idx]
+                    )?;
+                    Ok(format!("Some(&{})", temp_name))
+                }
             }
-        }
-    };
+        };
 
     match op {
         "Transpose" => {
@@ -50,7 +84,7 @@ pub(crate) fn handle_tensor_ops(ctx: &mut OpContext, w: &mut dyn Write) -> std::
             )?;
         }
         "Reshape" => {
-            let shape = resolve_i64(1, ctx);
+            let shape = resolve_i64_with_temp(1, ctx, w, &tab)?;
             writeln!(
                 w,
                 "{}let {} = lele::kernels::reshape(&{}, {});",
@@ -59,7 +93,7 @@ pub(crate) fn handle_tensor_ops(ctx: &mut OpContext, w: &mut dyn Write) -> std::
         }
         "Unsqueeze" => {
             let axes = if ctx.node.input.len() > 1 && !ctx.node.input[1].is_empty() {
-                resolve_i64(1, ctx)
+                resolve_i64_with_temp(1, ctx, w, &tab)?
             } else {
                 let axes_attr = ctx
                     .node
@@ -78,7 +112,7 @@ pub(crate) fn handle_tensor_ops(ctx: &mut OpContext, w: &mut dyn Write) -> std::
         }
         "Squeeze" => {
             let axes = if ctx.node.input.len() > 1 && !ctx.node.input[1].is_empty() {
-                resolve_i64_opt(1, ctx)
+                resolve_i64_opt_with_temp(1, ctx, w, &tab)?
             } else {
                 let axes_attr = ctx
                     .node
@@ -148,12 +182,55 @@ pub(crate) fn handle_tensor_ops(ctx: &mut OpContext, w: &mut dyn Write) -> std::
             "{}let {} = lele::kernels::size(&{});",
             tab, outputs[0], inputs[0]
         )?,
-        "Cast" => writeln!(
-            w,
-            "{}let {} = {}.clone(); // Cast ignored",
-            tab, outputs[0], inputs[0]
-        )?,
+        "Cast" => {
+            let to = ctx
+                .node
+                .attribute
+                .iter()
+                .find(|a| a.name == "to")
+                .map(|a| a.i);
+
+            // Always use a temporary buffer for Cast to avoid borrow conflicts
+            // Cast operations typically convert between types, and reusing buffers
+            // can lead to borrowing issues when the input TensorView holds a reference
+            // to the same buffer we're trying to mutably borrow for output
+
+            if to == Some(7) || to == Some(6) || to == Some(9) {
+                writeln!(
+                    w,
+                    "{}let mut temp_cast_buf_{} = Vec::<i64>::new();",
+                    tab, outputs[0]
+                )?;
+                writeln!(
+                    w,
+                    "{}let {} = lele::kernels::utils::cast_to_i64(&{}, &mut temp_cast_buf_{});",
+                    tab, outputs[0], inputs[0], outputs[0]
+                )?;
+            } else if to == Some(1) {
+                writeln!(
+                    w,
+                    "{}let mut temp_cast_buf_{} = Vec::<f32>::new();",
+                    tab, outputs[0]
+                )?;
+                writeln!(
+                    w,
+                    "{}let {} = lele::kernels::utils::cast_to_f32(&{}, &mut temp_cast_buf_{});",
+                    tab, outputs[0], inputs[0], outputs[0]
+                )?;
+            } else {
+                writeln!(
+                    w,
+                    "{}let {} = {}.clone(); // Cast ignored",
+                    tab, outputs[0], inputs[0]
+                )?;
+            }
+        }
         "ConstantOfShape" => {
+            let is_i64 = ctx
+                .var_types
+                .get(&ctx.outputs[0])
+                .map(|s| s == "i64")
+                .unwrap_or(false);
             let val = ctx
                 .node
                 .attribute
@@ -161,48 +238,55 @@ pub(crate) fn handle_tensor_ops(ctx: &mut OpContext, w: &mut dyn Write) -> std::
                 .find(|a| a.name == "value")
                 .and_then(|a| a.t.as_ref())
                 .map(|t| {
-                    if let Ok((data, _)) = crate::model::tensor_to_array(t)
-                        && !data.is_empty() {
+                    if let Ok((data, _)) = crate::model::tensor_to_array(t) {
+                        if !data.is_empty() {
                             return data[0];
                         }
+                    }
                     0.0
                 })
                 .unwrap_or(0.0);
-            writeln!(
-                w,
-                "{}let {} = lele::kernels::constant_of_shape(&{}, {:.1}, {});",
-                tab, outputs[0], inputs[0], val, buf_expr
-            )?;
+            if is_i64 {
+                writeln!(
+                    w,
+                    "{}let {} = lele::kernels::constant_of_shape(&{}, {}i64, {});",
+                    tab, outputs[0], inputs[0], val as i64, buf_expr
+                )?;
+            } else {
+                writeln!(
+                    w,
+                    "{}let {} = lele::kernels::constant_of_shape(&{}, {:.1}, {});",
+                    tab, outputs[0], inputs[0], val, buf_expr
+                )?;
+            }
         }
         "Slice" => {
-            let starts = resolve_i64(1, ctx);
-            let ends = resolve_i64(2, ctx);
-            let axes = resolve_i64(3, ctx);
-            let steps = resolve_i64(4, ctx);
+            let starts = resolve_i64_with_temp(1, ctx, w, &tab)?;
+            let ends = resolve_i64_with_temp(2, ctx, w, &tab)?;
+            let axes = resolve_i64_with_temp(3, ctx, w, &tab)?;
+            let steps = resolve_i64_with_temp(4, ctx, w, &tab)?;
             writeln!(
                 w,
                 "{}let {} = lele::kernels::slice(&{}, {}, {}, {}, {}, {});",
                 tab, outputs[0], inputs[0], starts, ends, axes, steps, buf_expr
             )?;
         }
-        "Expand" => writeln!(
-            w,
-            "{}let {} = lele::kernels::expand(&{}, {}, {});",
-            tab,
-            outputs[0],
-            inputs[0],
-            resolve_i64(1, ctx),
-            buf_expr
-        )?,
-        "Tile" => writeln!(
-            w,
-            "{}let {} = lele::kernels::tile(&{}, {}, {});",
-            tab,
-            outputs[0],
-            inputs[0],
-            resolve_i64(1, ctx),
-            buf_expr
-        )?,
+        "Expand" => {
+            let shape = resolve_i64_with_temp(1, ctx, w, &tab)?;
+            writeln!(
+                w,
+                "{}let {} = lele::kernels::expand(&{}, {}, {});",
+                tab, outputs[0], inputs[0], shape, buf_expr
+            )?;
+        }
+        "Tile" => {
+            let repeats = resolve_i64_with_temp(1, ctx, w, &tab)?;
+            writeln!(
+                w,
+                "{}let {} = lele::kernels::tile(&{}, {}, {});",
+                tab, outputs[0], inputs[0], repeats, buf_expr
+            )?;
+        }
         "Split" => {
             let axis = ctx
                 .node
@@ -212,7 +296,7 @@ pub(crate) fn handle_tensor_ops(ctx: &mut OpContext, w: &mut dyn Write) -> std::
                 .map(|a| a.i)
                 .unwrap_or(0);
             let splits = if ctx.node.input.len() > 1 && !ctx.node.input[1].is_empty() {
-                resolve_i64(1, ctx)
+                resolve_i64_with_temp(1, ctx, w, &tab)?
             } else {
                 let split_attr = ctx
                     .node
@@ -260,16 +344,37 @@ pub(crate) fn handle_tensor_ops(ctx: &mut OpContext, w: &mut dyn Write) -> std::
                 } else {
                     "None".to_string()
                 };
+            // For pad operation, we need pads as &[i64]
+            let pads_expr = if ctx.node.input.len() > 1 && !ctx.node.input[1].is_empty() {
+                let name = &ctx.node.input[1];
+                if let Some((ints, _)) = ctx.int64_map.get(name) {
+                    format!("&{:?}", ints)
+                } else {
+                    // pads is a computed tensor, we need to extract data
+                    let is_i64 = ctx
+                        .var_types
+                        .get(&ctx.inputs[1])
+                        .map(|t| t == "i64")
+                        .unwrap_or(false);
+                    if is_i64 {
+                        format!("&{}.data[..]", inputs[1])
+                    } else {
+                        // Need to convert f32 to i64
+                        writeln!(
+                            w,
+                            "{}let pads_i64 = lele::kernels::to_i64_vec(&{});",
+                            tab, inputs[1]
+                        )?;
+                        "&pads_i64".to_string()
+                    }
+                }
+            } else {
+                "&[]".to_string()
+            };
             writeln!(
                 w,
                 "{}let {} = lele::kernels::pad(&{}, {}, {}, {:?}, {});",
-                tab,
-                outputs[0],
-                inputs[0],
-                resolve_i64(1, ctx),
-                constant_value,
-                mode,
-                buf_expr
+                tab, outputs[0], inputs[0], pads_expr, constant_value, mode, buf_expr
             )?;
         }
         "DynamicQuantizeLinear" => {

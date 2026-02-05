@@ -1,8 +1,8 @@
 use crate::kernels::activations::{sigmoid, tanh};
 use crate::tensor::TensorView;
-use faer::Parallelism;
+use faer::{Accum, Par};
 use faer::linalg::matmul::matmul;
-use faer::mat::{from_raw_parts, from_raw_parts_mut};
+use faer::mat::{MatRef, MatMut};
 
 pub fn lstm<'b, 'a>(
     input: &TensorView<'b>,
@@ -67,20 +67,20 @@ pub fn lstm<'b, 'a>(
             // out: [4*H]
             let m = 4 * hidden_size;
             let k = input_size;
-            let a = from_raw_parts::<f32>(w_data.as_ptr(), m, k, k as isize, 1);
-            let b = from_raw_parts::<f32>(x_t.as_ptr(), k, 1, 1, 1);
-            let c = from_raw_parts_mut::<f32>(w_contribution.as_mut_ptr(), m, 1, 1, 1);
+            let a = MatRef::<f32>::from_raw_parts(w_data.as_ptr(), m, k, k as isize, 1);
+            let b = MatRef::<f32>::from_raw_parts(x_t.as_ptr(), k, 1, 1, 1);
+            let c = MatMut::<f32>::from_raw_parts_mut(w_contribution.as_mut_ptr(), m, 1, 1, 1);
 
-            matmul(c, a, b, None, 1.0, Parallelism::None);
+            matmul(c, Accum::Replace, a, b, 1.0, Par::Seq);
 
             // R * h_{t-1}
             // R: [4*H, H]
             // out_h: [H]
-            let a = from_raw_parts::<f32>(r_data.as_ptr(), m, hidden_size, hidden_size as isize, 1);
-            let b = from_raw_parts::<f32>(out_h.as_ptr(), hidden_size, 1, 1, 1);
-            let c = from_raw_parts_mut::<f32>(r_contribution.as_mut_ptr(), m, 1, 1, 1);
+            let a = MatRef::<f32>::from_raw_parts(r_data.as_ptr(), m, hidden_size, hidden_size as isize, 1);
+            let b = MatRef::<f32>::from_raw_parts(out_h.as_ptr(), hidden_size, 1, 1, 1);
+            let c = MatMut::<f32>::from_raw_parts_mut(r_contribution.as_mut_ptr(), m, 1, 1, 1);
 
-            matmul(c, a, b, None, 1.0, Parallelism::None);
+            matmul(c, Accum::Replace, a, b, 1.0, Par::Seq);
         }
 
         for g in 0..(4 * hidden_size) {

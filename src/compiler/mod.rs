@@ -89,13 +89,15 @@ impl<'a> NodeVisitor<'a> {
                 for (i, out_name) in node.output.iter().enumerate() {
                     let mut sources = Vec::new();
                     if let Some(g) = then_g
-                        && i < g.output.len() {
-                            sources.push(g.output[i].name.clone());
-                        }
+                        && i < g.output.len()
+                    {
+                        sources.push(g.output[i].name.clone());
+                    }
                     if let Some(g) = else_g
-                        && i < g.output.len() {
-                            sources.push(g.output[i].name.clone());
-                        }
+                        && i < g.output.len()
+                    {
+                        sources.push(g.output[i].name.clone());
+                    }
                     if !sources.is_empty() {
                         self.aliases.insert(out_name.clone(), sources);
                     }
@@ -237,11 +239,11 @@ fn solve_allocation(graph: &GraphProto, outputs: &[String]) -> (Allocator, Analy
                     }
                     // Also check inputs of the previous node to avoid immediate reuse in fused ops (e.g. Conv+Relu)
                     if id > 0
-                        && let Some(inps) = visitor.node_inputs.get(&(id - 1)) {
-                            input_bufs.extend(
-                                inps.iter().filter_map(|n| all_allocations.get(n)).cloned(),
-                            );
-                        }
+                        && let Some(inps) = visitor.node_inputs.get(&(id - 1))
+                    {
+                        input_bufs
+                            .extend(inps.iter().filter_map(|n| all_allocations.get(n)).cloned());
+                    }
                     let mut deferred = Vec::new();
                     let mut selected_buf = None;
                     while let Some(Reverse(b)) = free_buffers.pop() {
@@ -371,19 +373,21 @@ impl Compiler {
         // 1. Load initializers
         for init in &graph.initializer {
             if let Ok((data, shape)) = tensor_to_array(init)
-                && !data.is_empty() {
-                    constants.insert(init.name.clone(), (data, shape));
-                }
+                && !data.is_empty()
+            {
+                constants.insert(init.name.clone(), (data, shape));
+            }
         }
         // 2. Load existing Constant nodes
         for node in &graph.node {
             if node.op_type == "Constant"
                 && let Some(attr) = node.attribute.iter().find(|a| a.name == "value")
-                    && let Some(t) = &attr.t
-                        && let Ok((data, shape)) = tensor_to_array(t)
-                            && !data.is_empty() {
-                                constants.insert(node.output[0].clone(), (data, shape));
-                            }
+                && let Some(t) = &attr.t
+                && let Ok((data, shape)) = tensor_to_array(t)
+                && !data.is_empty()
+            {
+                constants.insert(node.output[0].clone(), (data, shape));
+            }
         }
         let mut folded_indices = std::collections::HashSet::new();
         let mut new_initializers = Vec::new();
@@ -622,25 +626,27 @@ impl Compiler {
                     if let Some(pos) = nodes
                         .iter()
                         .position(|n| !n.output.is_empty() && n.output[0] == *input_name)
-                        && pos < i && pos != i - 1 {
-                            // If it's before and not immediately before
-                            let producer = nodes[pos];
-                            if producer.op_type == "ConstantOfShape" {
-                                // Check if producer depends on weights (so it can be moved anywhere)
-                                // Or constants?
-                                // ConstantOfShape input[0] is shape. Check if it's a weight or initializer.
-                                let shape_input = &producer.input[0];
-                                // Check against known weights/initializers
-                                // We have weight_lookup keyed by sanitized name, but let's check raw name in offset_map?
-                                // Actually sanitize_name(shape_input) lookup works.
-                                if weight_lookup.contains_key(&sanitize_name(shape_input))
-                                    || int64_map.contains_key(shape_input)
-                                {
-                                    // Safe to move!
-                                    changes.push((pos, i));
-                                }
+                        && pos < i
+                        && pos != i - 1
+                    {
+                        // If it's before and not immediately before
+                        let producer = nodes[pos];
+                        if producer.op_type == "ConstantOfShape" {
+                            // Check if producer depends on weights (so it can be moved anywhere)
+                            // Or constants?
+                            // ConstantOfShape input[0] is shape. Check if it's a weight or initializer.
+                            let shape_input = &producer.input[0];
+                            // Check against known weights/initializers
+                            // We have weight_lookup keyed by sanitized name, but let's check raw name in offset_map?
+                            // Actually sanitize_name(shape_input) lookup works.
+                            if weight_lookup.contains_key(&sanitize_name(shape_input))
+                                || int64_map.contains_key(shape_input)
+                            {
+                                // Safe to move!
+                                changes.push((pos, i));
                             }
                         }
+                    }
                 }
             }
         }
@@ -684,7 +690,7 @@ impl Compiler {
         let mut chunk_functions = Vec::new(); // Will hold the code for fn chunk_0(...) { ... }
         let mut body_buffer = Vec::new(); // Will hold the code for forward() body
         let mut current_id = 0;
-        generate_partitioned_graph(
+        let var_types = generate_partitioned_graph(
             &nodes,
             &mut chunk_functions,
             &mut body_buffer,
@@ -719,9 +725,10 @@ impl Compiler {
                 end += 1;
             }
             if end > start
-                && let Ok(buf_idx) = all_code[start..end].parse::<usize>() {
-                    used_buffers.insert(buf_idx);
-                }
+                && let Ok(buf_idx) = all_code[start..end].parse::<usize>()
+            {
+                used_buffers.insert(buf_idx);
+            }
             search_idx = end;
         }
         // 2. Generate Rust Code
@@ -816,6 +823,126 @@ impl Compiler {
 
         writeln!(
             &mut code,
+            "    fn weight_i64(&self, offset: usize, len: usize, shape: &'a [usize]) -> TensorView<'static, i64> {{"
+        )?;
+        writeln!(
+            &mut code,
+            "        let slice = &self.data[offset..offset+len];"
+        )?;
+        writeln!(
+            &mut code,
+            "        let mut i64_vec = Vec::with_capacity(slice.len() / 8);"
+        )?;
+        writeln!(&mut code, "        for chunk in slice.chunks_exact(8) {{")?;
+        writeln!(
+            &mut code,
+            "            let bytes: [u8; 8] = [chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7]];"
+        )?;
+        writeln!(
+            &mut code,
+            "            i64_vec.push(i64::from_le_bytes(bytes));"
+        )?;
+        writeln!(&mut code, "        }}")?;
+        writeln!(
+            &mut code,
+            "        TensorView::from_owned(i64_vec, shape.to_vec())"
+        )?;
+        writeln!(&mut code, "    }}")?;
+
+        writeln!(
+            &mut code,
+            "    fn weight_i32_i64(&self, offset: usize, len: usize, shape: &'a [usize]) -> TensorView<'static, i64> {{"
+        )?;
+        writeln!(
+            &mut code,
+            "        let slice = &self.data[offset..offset+len];"
+        )?;
+        writeln!(
+            &mut code,
+            "        let mut i64_vec = Vec::with_capacity(slice.len() / 4);"
+        )?;
+        writeln!(&mut code, "        for chunk in slice.chunks_exact(4) {{")?;
+        writeln!(
+            &mut code,
+            "            let bytes: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];"
+        )?;
+        writeln!(
+            &mut code,
+            "            i64_vec.push(i32::from_le_bytes(bytes) as i64);"
+        )?;
+        writeln!(&mut code, "        }}")?;
+        writeln!(
+            &mut code,
+            "        TensorView::from_owned(i64_vec, shape.to_vec())"
+        )?;
+        writeln!(&mut code, "    }}")?;
+
+        writeln!(
+            &mut code,
+            "    fn weight_i32(&self, offset: usize, len: usize, shape: &'a [usize]) -> TensorView<'static, i32> {{"
+        )?;
+        writeln!(
+            &mut code,
+            "        let slice = &self.data[offset..offset+len];"
+        )?;
+        writeln!(
+            &mut code,
+            "        let mut i32_vec = Vec::with_capacity(slice.len() / 4);"
+        )?;
+        writeln!(&mut code, "        for chunk in slice.chunks_exact(4) {{")?;
+        writeln!(
+            &mut code,
+            "            let bytes: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];"
+        )?;
+        writeln!(
+            &mut code,
+            "            i32_vec.push(i32::from_le_bytes(bytes));"
+        )?;
+        writeln!(&mut code, "        }}")?;
+        writeln!(
+            &mut code,
+            "        TensorView::from_owned(i32_vec, shape.to_vec())"
+        )?;
+        writeln!(&mut code, "    }}")?;
+
+        writeln!(
+            &mut code,
+            "    fn weight_i64_f32(&self, offset: usize, len: usize, shape: &'a [usize]) -> TensorView<'static, f32> {{"
+        )?;
+        writeln!(
+            &mut code,
+            "        let weight = self.weight_i64(offset, len, shape);"
+        )?;
+        writeln!(
+            &mut code,
+            "        let f32_vec: Vec<f32> = weight.data.iter().map(|&x| x as f32).collect();"
+        )?;
+        writeln!(
+            &mut code,
+            "        TensorView::from_owned(f32_vec, shape.to_vec())"
+        )?;
+        writeln!(&mut code, "    }}")?;
+
+        writeln!(
+            &mut code,
+            "    fn weight_i32_f32(&self, offset: usize, len: usize, shape: &'a [usize]) -> TensorView<'static, f32> {{"
+        )?;
+        writeln!(
+            &mut code,
+            "        let weight = self.weight_i32(offset, len, shape);"
+        )?;
+        writeln!(
+            &mut code,
+            "        let f32_vec: Vec<f32> = weight.data.iter().map(|&x| x as f32).collect();"
+        )?;
+        writeln!(
+            &mut code,
+            "        TensorView::from_owned(f32_vec, shape.to_vec())"
+        )?;
+        writeln!(&mut code, "    }}")?;
+
+        writeln!(
+            &mut code,
             "    fn weight_u8(&self, offset: usize, len: usize, shape: &'a [usize]) -> TensorView<'static, f32> {{"
         )?;
         writeln!(
@@ -882,83 +1009,37 @@ impl Compiler {
         )?;
         writeln!(&mut code, "    }}")?;
 
-        writeln!(
-            &mut code,
-            "    fn weight_i32(&self, offset: usize, len: usize, shape: &'a [usize]) -> TensorView<'static, f32> {{"
-        )?;
-        writeln!(
-            &mut code,
-            "        let slice = &self.data[offset..offset+len];"
-        )?;
-        writeln!(
-            &mut code,
-            "        let mut i32_vec = Vec::with_capacity(slice.len() / 4);"
-        )?;
-        writeln!(&mut code, "        for chunk in slice.chunks_exact(4) {{")?;
-        writeln!(
-            &mut code,
-            "            let bytes: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];"
-        )?;
-        writeln!(
-            &mut code,
-            "            i32_vec.push(i32::from_le_bytes(bytes));"
-        )?;
-        writeln!(&mut code, "        }}")?;
-        writeln!(
-            &mut code,
-            "        let f32_vec: Vec<f32> = i32_vec.iter().map(|&x| x as f32).collect();"
-        )?;
-        writeln!(
-            &mut code,
-            "        TensorView::from_owned(f32_vec, shape.to_vec())"
-        )?;
-        writeln!(&mut code, "    }}")?;
-
-        writeln!(
-            &mut code,
-            "    fn weight_i64(&self, offset: usize, len: usize, shape: &'a [usize]) -> TensorView<'static, f32> {{"
-        )?;
-        writeln!(
-            &mut code,
-            "        let slice = &self.data[offset..offset+len];"
-        )?;
-        writeln!(
-            &mut code,
-            "        let mut i64_vec = Vec::with_capacity(slice.len() / 8);"
-        )?;
-        writeln!(&mut code, "        for chunk in slice.chunks_exact(8) {{")?;
-        writeln!(
-            &mut code,
-            "            let bytes: [u8; 8] = [chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7]];"
-        )?;
-        writeln!(
-            &mut code,
-            "            i64_vec.push(i64::from_le_bytes(bytes));"
-        )?;
-        writeln!(&mut code, "        }}")?;
-        writeln!(
-            &mut code,
-            "        let f32_vec: Vec<f32> = i64_vec.iter().map(|&x| x as f32).collect();"
-        )?;
-        writeln!(
-            &mut code,
-            "        TensorView::from_owned(f32_vec, shape.to_vec())"
-        )?;
-        writeln!(&mut code, "    }}")?;
-
         // Inference Function
         writeln!(&mut code, "\n    // Inference Entry Point")?;
         let args: Vec<String> = graph
             .input
             .iter()
-            .map(|i| format!("{}: TensorView<'a>", sanitize_name(&i.name)))
+            .map(|i| {
+                let name = sanitize_name(&i.name);
+                let ty = var_types.get(&name).map(|s| s.as_str()).unwrap_or("f32");
+                if ty == "f32" {
+                    format!("{}: TensorView<'a>", name)
+                } else {
+                    format!("{}: TensorView<'a, {}>", name, ty)
+                }
+            })
             .collect();
         // Generate return type
-        let ret_types: Vec<String> = (0..graph.output.len())
-            .map(|_| "TensorView<'a>".to_string())
+        let ret_types: Vec<String> = graph
+            .output
+            .iter()
+            .map(|o| {
+                let name = sanitize_name(&o.name);
+                let ty = var_types.get(&name).map(|s| s.as_str()).unwrap_or("f32");
+                if ty == "f32" {
+                    "TensorView<'a>".to_string()
+                } else {
+                    format!("TensorView<'a, {}>", ty)
+                }
+            })
             .collect();
         let ret_sig = if ret_types.len() == 1 {
-            "TensorView<'a>".to_string()
+            ret_types[0].clone()
         } else {
             format!("({})", ret_types.join(", "))
         };
@@ -1016,18 +1097,27 @@ impl Compiler {
             .iter()
             .map(|o| {
                 let name = sanitize_name(&o.name);
+                let target_type = var_types.get(&name).map(|s| s.as_str()).unwrap_or("f32");
                 if let Some((offset, len, shape, data_type)) = weight_lookup.get(&name) {
-                    match data_type {
-                        1 => format!("self.weight_f32({}, {}, &{:?})", offset, len, shape),
-                        2 => format!("self.weight_u8({}, {}, &{:?})", offset, len, shape),
-                        3 => format!("self.weight_i8({}, {}, &{:?})", offset, len, shape),
-                        6 => format!("self.weight_i32({}, {}, &{:?})", offset, len, shape),
-                        7 => format!("self.weight_i64({}, {}, &{:?})", offset, len, shape),
-                        10 => format!("self.weight_f16({}, {}, &{:?})", offset, len, shape),
-                        _ => format!("self.weight_f32({}, {}, &{:?})", offset, len, shape),
+                    if target_type == "i64" {
+                        match data_type {
+                            7 => format!("self.weight_i64({}, {}, &{:?})", offset, len, shape),
+                            6 => format!("self.weight_i32_i64({}, {}, &{:?})", offset, len, shape),
+                            _ => format!("self.weight_i64({}, {}, &{:?})", offset, len, shape),
+                        }
+                    } else {
+                        match data_type {
+                            1 => format!("self.weight_f32({}, {}, &{:?})", offset, len, shape),
+                            2 => format!("self.weight_u8({}, {}, &{:?})", offset, len, shape),
+                            3 => format!("self.weight_i8({}, {}, &{:?})", offset, len, shape),
+                            6 => format!("self.weight_i32_f32({}, {}, &{:?})", offset, len, shape),
+                            7 => format!("self.weight_i64_f32({}, {}, &{:?})", offset, len, shape),
+                            10 => format!("self.weight_f16({}, {}, &{:?})", offset, len, shape),
+                            _ => format!("self.weight_f32({}, {}, &{:?})", offset, len, shape),
+                        }
                     }
                 } else {
-                    format!("{}.clone()", name)
+                    name
                 }
             })
             .collect();
@@ -1093,34 +1183,35 @@ fn collect_weights(
     for node in &graph.node {
         if node.op_type == "Constant"
             && let Some(attr) = node.attribute.iter().find(|a| a.name == "value")
-                && let Some(t) = &attr.t {
-                    // Populate int64_map for INT64 types
-                    if t.data_type == 7 {
-                        // INT64
-                        if let Ok((data, dims)) = tensor_to_array(t) {
-                            let ints: Vec<i64> = data.iter().map(|&x| x as i64).collect();
-                            if let Some(out_name) = node.output.first() {
-                                int64_map.insert(out_name.clone(), (ints, dims));
-                            }
-                        }
-                    }
-
-                    if let Ok((bytes, shape, data_type)) = crate::model::tensor_to_vec_u8(t) {
-                        if !bytes.is_empty() {
-                            bin_data.write_all(&bytes)?;
-                            if let Some(out_name) = node.output.first() {
-                                offset_map.push((
-                                    out_name.clone(),
-                                    *current_offset,
-                                    bytes.len(),
-                                    shape,
-                                    data_type,
-                                ));
-                                *current_offset += bytes.len();
-                            }
-                        }
+            && let Some(t) = &attr.t
+        {
+            // Populate int64_map for INT64 types
+            if t.data_type == 7 {
+                // INT64
+                if let Ok((data, dims)) = tensor_to_array(t) {
+                    let ints: Vec<i64> = data.iter().map(|&x| x as i64).collect();
+                    if let Some(out_name) = node.output.first() {
+                        int64_map.insert(out_name.clone(), (ints, dims));
                     }
                 }
+            }
+
+            if let Ok((bytes, shape, data_type)) = crate::model::tensor_to_vec_u8(t) {
+                if !bytes.is_empty() {
+                    bin_data.write_all(&bytes)?;
+                    if let Some(out_name) = node.output.first() {
+                        offset_map.push((
+                            out_name.clone(),
+                            *current_offset,
+                            bytes.len(),
+                            shape,
+                            data_type,
+                        ));
+                        *current_offset += bytes.len();
+                    }
+                }
+            }
+        }
         // 3. Recurse
         for attr in &node.attribute {
             if let Some(g) = &attr.g {

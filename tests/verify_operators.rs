@@ -68,3 +68,43 @@ fn test_softmax_simple() {
         assert_abs_diff_eq!(val, exp, epsilon = 1e-5);
     }
 }
+
+#[test]
+fn test_matmul_integer_per_channel_scale() {
+    use lele::kernels::mat_mul_integer_with_scale_bias;
+
+    // A: [1, 2] -> values [10, 20]
+    let a_data = vec![10.0, 20.0];
+    let a_shape = vec![1, 2];
+    let a = TensorView::from_owned(a_data, a_shape);
+
+    // B: [2, 2] -> values [[1, 2], [3, 4]]
+    let b_data = vec![1.0, 2.0, 3.0, 4.0];
+    let b_shape = vec![2, 2];
+    let b = TensorView::from_owned(b_data, b_shape);
+
+    // Scale: [2] -> values [0.5, 2.0]
+    // Col 0 scale = 0.5
+    // Col 1 scale = 2.0
+    let scale_data = vec![0.5, 2.0];
+    let scale_shape = vec![2];
+    let scale = TensorView::from_owned(scale_data, scale_shape);
+
+    let mut out_buf = Vec::new();
+    // mat_mul_integer APIs expect None for ZP if not used.
+    let out = mat_mul_integer_with_scale_bias(
+        &a, &b, None, None, Some(&scale), None, &mut out_buf
+    );
+
+    // Expected:
+    // Col 0: (10*1 + 20*3) * 0.5 = 70 * 0.5 = 35.0
+    // Col 1: (10*2 + 20*4) * 2.0 = 100 * 2.0 = 200.0
+    let expected = vec![35.0, 200.0];
+    
+    assert_eq!(out.shape.as_ref(), &[1, 2]);
+    for (i, (val, exp)) in out.data.iter().zip(expected.iter()).enumerate() {
+        assert_abs_diff_eq!(val, exp, epsilon = 1e-5); 
+        // If it was using scalar scale (0.5), idx 1 would be 50.0, failing this test.
+    }
+}
+

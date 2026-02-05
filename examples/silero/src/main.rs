@@ -35,11 +35,13 @@ struct VadSegment {
 
 fn main() {
     println!("=== Silero VAD Pure Rust Inference ===\n");
+    println!("CWD: {:?}", std::env::current_dir());
 
     // 1. Load Weights
     println!("Loading Silero weights...");
-    let bin = std::fs::read("examples/silero/silerovad_weights.bin")
+    let bin = std::fs::read("examples/silero/src/silerovad_weights.bin")
         .or_else(|_| std::fs::read("silerovad_weights.bin"))
+        .or_else(|_| std::fs::read("src/silerovad_weights.bin"))
         .expect("Failed to load weights.");
     let model = silerovad::SileroVad::new(&bin);
     println!(
@@ -84,8 +86,8 @@ fn main() {
 
     // Initial state: [2, 1, 128] zeros
     let mut state_data = vec![0.0f32; 2 * 1 * 128];
-    // SR: [1]
-    let sr_data = vec![sample_rate as f32];
+    // SR: [1] - needs to be i64
+    let sr_data = vec![sample_rate as i64];
 
     let start_total = Instant::now();
     let mut all_outputs = Vec::with_capacity(num_chunks);

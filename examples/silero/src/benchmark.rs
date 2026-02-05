@@ -26,7 +26,7 @@ fn main() {
     let state_shape = [2, 1, 128];
 
     // SR: [1]
-    let sr_data = vec![16000.0f32];
+    let sr_data = vec![16000i64];
     let sr_shape = [1];
 
     // Warmup

@@ -1,15 +1,14 @@
 use crate::kernels::utils;
 use crate::tensor::TensorView;
-pub fn concat<'b, 'a>(
-    inputs: &[&TensorView<'b>],
+pub fn concat<'b, 'a, T: Clone + Copy + std::fmt::Debug>(
+    inputs: &[&TensorView<'b, T>],
     axis: i64,
-    out: &'a mut Vec<f32>,
-) -> TensorView<'a> {
+    out: &'a mut Vec<T>,
+) -> TensorView<'a, T> {
     if inputs.is_empty() {
         return TensorView::empty();
     }
     // Find first non-empty input to establish rank and base out_shape
-    // Optimization: iterate directly to avoid allocating Vec for non_empty_inputs
     let mut first_non_empty = None;
     for (i, inp) in inputs.iter().enumerate() {
         if !inp.data.is_empty() {
@@ -61,19 +60,6 @@ pub fn concat<'b, 'a>(
     let out_ptr = out.as_mut_ptr();
     let mut current_out_offset = 0;
 
-    // Fast path for 2 inputs along axis 0 or 1
-    if inputs.len() == 2 && axis < 2 && outer_dim == 1 {
-        let inp0 = inputs[0];
-        let inp1 = inputs[1];
-        let len0 = inp0.data.len();
-        let len1 = inp1.data.len();
-        unsafe {
-            std::ptr::copy_nonoverlapping(inp0.data.as_ptr(), out_ptr, len0);
-            std::ptr::copy_nonoverlapping(inp1.data.as_ptr(), out_ptr.add(len0), len1);
-        }
-        return TensorView::from_slice(out, out_shape);
-    }
-
     // Direct copy without allocating offset vectors
     for outer_i in 0..outer_dim {
         for inp in inputs {
@@ -97,14 +83,14 @@ pub fn concat<'b, 'a>(
     }
     TensorView::from_slice(out, out_shape)
 }
-pub fn slice<'b, 'a>(
-    input: &TensorView<'b>,
+pub fn slice<'b, 'a, T: Clone + Copy + std::fmt::Debug>(
+    input: &TensorView<'b, T>,
     starts: &[i64],
     ends: &[i64],
     axes: &[i64],
     steps: &[i64],
-    out: &'a mut Vec<f32>,
-) -> TensorView<'a> {
+    out: &'a mut Vec<T>,
+) -> TensorView<'a, T> {
     // Fast path: simple contiguous slice along first dimension
     // This handles the most common case: slicing rows of a 2D tensor
     if !axes.is_empty() && axes.len() == 1 && steps.is_empty() {
@@ -242,13 +228,13 @@ pub fn slice<'b, 'a>(
     }
     TensorView::from_slice(out, out_shape)
 }
-pub fn pad<'b, 'a>(
-    input: &TensorView<'b>,
+pub fn pad<'b, 'a, T: Clone + Copy + std::fmt::Debug>(
+    input: &TensorView<'b, T>,
     pads: &[i64],
-    constant_value: Option<&TensorView<'b>>,
+    constant_value: Option<&TensorView<'b, T>>,
     _mode: &str,
-    out: &'a mut Vec<f32>,
-) -> TensorView<'a> {
+    out: &'a mut Vec<T>,
+) -> TensorView<'a, T> {
     let p = pads.iter().map(|&x| x as usize).collect::<Vec<_>>();
     let rank = input.shape.len();
     if p.len() < rank * 2 {
@@ -267,10 +253,20 @@ pub fn pad<'b, 'a>(
     unsafe {
         out.set_len(total);
     }
-    let fill_val = constant_value
-        .and_then(|t| t.data.first())
-        .copied()
-        .unwrap_or(0.0);
+    let fill_val = if let Some(cv) = constant_value {
+        if !cv.data.is_empty() {
+            cv.data[0]
+        } else {
+            // We need a way to get a default T.
+            // Since T is Copy and usually numeric in ML,
+            // but we don't have Default bound here.
+            // Let's assume input has at least one element or we use first element of input if fill_val missing?
+            // Actually most ONNX Pad constant_value is 0.
+            input.data[0]
+        }
+    } else {
+        input.data[0]
+    };
     out.fill(fill_val);
     if rank == 1 {
         let start = p[0];
@@ -318,12 +314,16 @@ pub fn pad<'b, 'a>(
     }
     TensorView::from_slice(out, new_shape)
 }
-pub fn gather<'b, 'a>(
-    data: &TensorView<'b>,
-    indices: &TensorView<'b>,
+pub fn gather<'b, 'a, T, I>(
+    data: &TensorView<'b, T>,
+    indices: &TensorView<'b, I>,
     axis: i64,
-    out: &'a mut Vec<f32>,
-) -> TensorView<'a> {
+    out: &'a mut Vec<T>,
+) -> TensorView<'a, T>
+where
+    T: Copy + std::fmt::Debug,
+    I: crate::kernels::utils::AsI64 + Copy + std::fmt::Debug,
+{
     let axis = if axis < 0 {
         (data.dim() as i64 + axis) as usize
     } else {
@@ -347,19 +347,19 @@ pub fn gather<'b, 'a>(
     let inner_dim: usize = data.shape[axis + 1..].iter().product();
     let indices_len = indices.data.len();
     let mut out_idx = 0;
-    let out_ptr = out.as_mut_ptr();
-    let data_ptr = data.data.as_ptr();
-    let indices_ptr = indices.data.as_ptr();
+
     for o in 0..outer_dim {
         for idx_i in 0..indices_len {
             unsafe {
-                let idx_val = *indices_ptr.add(idx_i) as usize;
+                let mut idx_val = indices.data[idx_i].as_i64();
+                if idx_val < 0 {
+                    idx_val += axis_dim as i64;
+                }
+                let idx_val = idx_val as usize;
                 let src_offset = o * axis_dim * inner_dim + idx_val * inner_dim;
-                std::ptr::copy_nonoverlapping(
-                    data_ptr.add(src_offset),
-                    out_ptr.add(out_idx),
-                    inner_dim,
-                );
+                for k in 0..inner_dim {
+                    *out.as_mut_ptr().add(out_idx + k) = data.data[src_offset + k];
+                }
                 out_idx += inner_dim;
             }
         }
@@ -369,11 +369,11 @@ pub fn gather<'b, 'a>(
 pub fn cast<'a>(input: &TensorView<'a>, _to: i64) -> TensorView<'a> {
     input.clone()
 }
-pub fn transpose<'b, 'a>(
-    input: &TensorView<'b>,
+pub fn transpose<'b, 'a, T: Clone + Copy + std::fmt::Debug>(
+    input: &TensorView<'b, T>,
     perm: &[i64],
-    out: &'a mut Vec<f32>,
-) -> TensorView<'a> {
+    out: &'a mut Vec<T>,
+) -> TensorView<'a, T> {
     let ndim = input.dim();
     let perm: Vec<usize> = if perm.is_empty() {
         (0..ndim).rev().collect()
@@ -414,19 +414,21 @@ pub fn transpose<'b, 'a>(
     }
     TensorView::from_slice(out, out_shape)
 }
-pub fn to_i64_vec(input: &TensorView) -> Vec<i64> {
+pub fn to_i64_vec<T: crate::kernels::utils::AsI64 + Copy + std::fmt::Debug>(
+    input: &TensorView<T>,
+) -> Vec<i64> {
     let mut out = Vec::with_capacity(input.data.len());
     for &val in input.data.iter() {
-        out.push(val as i64);
+        out.push(val.as_i64());
     }
     out
 }
-pub fn split<'a>(
-    input: &TensorView,
+pub fn split<'a, T: Clone + Copy + std::fmt::Debug>(
+    input: &TensorView<'_, T>,
     axis: i64,
     splits: &[i64],
-    outputs: &'a mut [Vec<f32>],
-) -> Vec<TensorView<'a>> {
+    outputs: &'a mut [Vec<T>],
+) -> Vec<TensorView<'a, T>> {
     let ndim = input.dim();
     let axis = if axis < 0 {
         (ndim as i64 + axis) as usize
@@ -471,12 +473,16 @@ pub fn split<'a>(
     }
     results
 }
-pub fn where_op<'b, 'a>(
-    condition: &TensorView<'b>,
-    x: &TensorView<'b>,
-    y: &TensorView<'b>,
-    out: &'a mut Vec<f32>,
-) -> TensorView<'a> {
+pub fn where_op<'b, 'a, T, C>(
+    condition: &TensorView<'b, C>,
+    x: &TensorView<'b, T>,
+    y: &TensorView<'b, T>,
+    out: &'a mut Vec<T>,
+) -> TensorView<'a, T>
+where
+    T: Clone + Copy + std::fmt::Debug,
+    C: Clone + Copy + std::fmt::Debug + crate::kernels::utils::AsI64,
+{
     let cond_data = &condition.data;
     let x_data = &x.data;
     let y_data = &y.data;
@@ -487,7 +493,7 @@ pub fn where_op<'b, 'a>(
             out.set_len(0);
         }
         for i in 0..numel {
-            out.push(if cond_data[i] != 0.0 {
+            out.push(if cond_data[i].as_i64() != 0 {
                 x_data[i]
             } else {
                 y_data[i]
@@ -511,7 +517,7 @@ pub fn where_op<'b, 'a>(
         let cond_idx = map_broadcast_index(&coords, &condition.shape, &cond_strides);
         let x_idx = map_broadcast_index(&coords, &x.shape, &x_strides);
         let y_idx = map_broadcast_index(&coords, &y.shape, &y_strides);
-        out.push(if cond_data[cond_idx] != 0.0 {
+        out.push(if cond_data[cond_idx].as_i64() != 0 {
             x_data[x_idx]
         } else {
             y_data[y_idx]

@@ -23,6 +23,79 @@ pub fn get_offset(indices: &[usize], strides: &[usize]) -> usize {
         .map(|(&idx, &stride)| idx * stride)
         .sum()
 }
+
+pub trait AsI64 {
+    fn as_i64(self) -> i64;
+}
+impl AsI64 for f32 {
+    #[inline]
+    fn as_i64(self) -> i64 {
+        self as i64
+    }
+}
+impl AsI64 for i64 {
+    #[inline]
+    fn as_i64(self) -> i64 {
+        self
+    }
+}
+impl AsI64 for i32 {
+    #[inline]
+    fn as_i64(self) -> i64 {
+        self as i64
+    }
+}
+
+pub trait AsF32 {
+    fn as_f32(self) -> f32;
+}
+impl AsF32 for f32 {
+    #[inline]
+    fn as_f32(self) -> f32 {
+        self
+    }
+}
+impl AsF32 for i64 {
+    #[inline]
+    fn as_f32(self) -> f32 {
+        self as f32
+    }
+}
+impl AsF32 for i32 {
+    #[inline]
+    fn as_f32(self) -> f32 {
+        self as f32
+    }
+}
+
+pub fn cast_to_f32<'a, 'b, T>(
+    input: &crate::tensor::TensorView<'a, T>,
+    out: &'b mut Vec<f32>,
+) -> crate::tensor::TensorView<'b, f32>
+where
+    T: Copy + AsF32 + std::fmt::Debug,
+{
+    ensure_capacity(out, input.data.len());
+    for i in 0..input.data.len() {
+        out[i] = input.data[i].as_f32();
+    }
+    crate::tensor::TensorView::from_slice(out, input.shape.to_vec())
+}
+
+pub fn cast_to_i64<'a, 'b, T>(
+    input: &crate::tensor::TensorView<'a, T>,
+    out: &'b mut Vec<i64>,
+) -> crate::tensor::TensorView<'b, i64>
+where
+    T: Copy + AsI64 + std::fmt::Debug,
+{
+    ensure_capacity(out, input.data.len());
+    for i in 0..input.data.len() {
+        out[i] = input.data[i].as_i64();
+    }
+    crate::tensor::TensorView::from_slice(out, input.shape.to_vec())
+}
+
 pub fn offset_to_indices(mut offset: usize, shape: &[usize]) -> Vec<usize> {
     let mut indices = vec![0; shape.len()];
     for i in (0..shape.len()).rev() {

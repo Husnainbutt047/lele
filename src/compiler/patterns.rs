@@ -79,8 +79,8 @@ pub fn get_default_patterns() -> Vec<Pattern> {
                         match dt {
                             1 => format!("self.weight_f32({}, {}, &{:?})", o, l, sh),
                             3 => format!("self.weight_i8({}, {}, &{:?})", o, l, sh),
-                            6 => format!("self.weight_i32({}, {}, &{:?})", o, l, sh),
-                            7 => format!("self.weight_i64({}, {}, &{:?})", o, l, sh),
+                            6 => format!("self.weight_i32_f32({}, {}, &{:?})", o, l, sh),
+                            7 => format!("self.weight_i64_f32({}, {}, &{:?})", o, l, sh),
                             10 => format!("self.weight_f16({}, {}, &{:?})", o, l, sh),
                             _ => format!("self.weight_f32({}, {}, &{:?})", o, l, sh),
                         }
@@ -375,19 +375,29 @@ pub fn get_default_patterns() -> Vec<Pattern> {
                 let concat_node = nodes[1];
                 let tab = "    ".repeat(indent);
                 let weight_name = sanitize_name(&concat_node.input[0]);
-                let input_val = cos_node
+                let value_attr = cos_node
                     .attribute
                     .iter()
                     .find(|a| a.name == "value")
-                    .and_then(|a| a.t.as_ref())
-                    .map(|t| {
-                        if !t.float_data.is_empty() {
-                            t.float_data[0]
+                    .and_then(|a| a.t.as_ref());
+                let (value_is_int, value_f32, value_i64) = if let Some(t) = value_attr {
+                    let dt = t.data_type;
+                    if dt == 6 || dt == 7 || !t.int64_data.is_empty() || !t.int32_data.is_empty() {
+                        let v = if !t.int64_data.is_empty() {
+                            t.int64_data[0]
+                        } else if !t.int32_data.is_empty() {
+                            t.int32_data[0] as i64
                         } else {
-                            0.0
-                        }
-                    })
-                    .unwrap_or(0.0);
+                            0
+                        };
+                        (true, v as f32, v)
+                    } else {
+                        let v = if !t.float_data.is_empty() { t.float_data[0] } else { 0.0 };
+                        (false, v, v as i64)
+                    }
+                } else {
+                    (false, 0.0, 0)
+                };
                 let shape_input = sanitize_name(&cos_node.input[0]);
                 let shape_expr = if let Some((o, l, s, dt)) = weights.get(&shape_input) {
                     let loader = match *dt {
@@ -404,21 +414,37 @@ pub fn get_default_patterns() -> Vec<Pattern> {
                     format!("&{}", shape_input)
                 };
                 let weight_expr = if let Some((o, l, s, dt)) = weights.get(&weight_name) {
-                    let loader = match *dt {
-                        1 => "weight_f32",
-                        2 => "weight_u8",
-                        3 => "weight_i8",
-                        6 => "weight_i32",
-                        7 => "weight_i64",
-                        10 => "weight_f16",
-                        _ => "weight_f32",
+                    let loader = if value_is_int {
+                        match *dt {
+                            1 => "weight_f32",
+                            2 => "weight_u8",
+                            3 => "weight_i8",
+                            6 => "weight_i32",
+                            7 => "weight_i64",
+                            10 => "weight_f16",
+                            _ => "weight_i64",
+                        }
+                    } else {
+                        match *dt {
+                            1 => "weight_f32",
+                            2 => "weight_u8",
+                            3 => "weight_i8",
+                            6 => "weight_i32_f32",
+                            7 => "weight_i64_f32",
+                            10 => "weight_f16",
+                            _ => "weight_f32",
+                        }
                     };
                     format!("self.{}({}, {}, &{:?})", loader, o, l, s)
                 } else {
                     weight_name
                 };
                 let output_name = sanitize_name(&concat_node.output[0]);
-                let buf_expr = if let Some(alloc) = allocator {
+                let buf_expr = if value_is_int {
+                    // Always use a local buffer for i64 to avoid ws.buf<f32> type mismatch
+                    writeln!(w, "{}let mut buf_{} = Vec::<i64>::new();", tab, output_name)?;
+                    format!("&mut buf_{}", output_name)
+                } else if let Some(alloc) = allocator {
                     if let Some(&idx) = alloc.tensor_to_buffer.get(&concat_node.output[0]) {
                         format!("&mut ws.buf_{}", idx)
                     } else {
@@ -429,11 +455,19 @@ pub fn get_default_patterns() -> Vec<Pattern> {
                     writeln!(w, "{}let mut buf_{} = Vec::<f32>::new();", tab, output_name)?;
                     format!("&mut buf_{}", output_name)
                 };
-                writeln!(
-                    w,
-                    "{}let {} = self.embedding_concat({}, {:.1}, {}, {});",
-                    tab, output_name, shape_expr, input_val, weight_expr, buf_expr
-                )?;
+                if value_is_int {
+                    writeln!(
+                        w,
+                        "{}let {} = self.embedding_concat_i64({}, {}, {}, {});",
+                        tab, output_name, shape_expr, value_i64, weight_expr, buf_expr
+                    )?;
+                } else {
+                    writeln!(
+                        w,
+                        "{}let {} = self.embedding_concat({}, {:.1}, {}, {});",
+                        tab, output_name, shape_expr, value_f32, weight_expr, buf_expr
+                    )?;
+                }
                 Ok(())
             }),
         },

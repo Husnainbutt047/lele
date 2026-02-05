@@ -97,16 +97,41 @@ pub(crate) fn handle_math_ops(ctx: &mut OpContext, w: &mut dyn Write) -> std::io
             "{}let {} = lele::kernels::cos(&{}, {});",
             tab, outputs[0], inputs[0], buf_expr
         )?,
-        "Equal" => writeln!(
-            w,
-            "{}let {} = lele::kernels::equal(&{}, &{}, {});",
-            tab, outputs[0], inputs[0], inputs[1], buf_expr
-        )?,
-        "Less" => writeln!(
-            w,
-            "{}let {} = lele::kernels::less(&{}, &{}, {});",
-            tab, outputs[0], inputs[0], inputs[1], buf_expr
-        )?,
+        "Equal" => {
+            // Equal can work with both f32 and i64
+            let is_i64 = ctx.var_types.get(&ctx.outputs[0]).map(|t| t == "i64").unwrap_or(false) ||
+                         ctx.var_types.get(&ctx.inputs[0]).map(|t| t == "i64").unwrap_or(false);
+            if is_i64 {
+                writeln!(
+                    w,
+                    "{}let {} = lele::kernels::equal_i64(&{}, &{}, {});",
+                    tab, outputs[0], inputs[0], inputs[1], buf_expr
+                )?;
+            } else {
+                writeln!(
+                    w,
+                    "{}let {} = lele::kernels::equal(&{}, &{}, {});",
+                    tab, outputs[0], inputs[0], inputs[1], buf_expr
+                )?;
+            }
+        }
+        "Less" => {
+            let is_i64 = ctx.var_types.get(&inputs[0]).map(|t| t == "i64").unwrap_or(false)
+                || ctx.var_types.get(&inputs[1]).map(|t| t == "i64").unwrap_or(false);
+            if is_i64 {
+                writeln!(
+                    w,
+                    "{}let {} = lele::kernels::less_i64(&{}, &{}, {});",
+                    tab, outputs[0], inputs[0], inputs[1], buf_expr
+                )?;
+            } else {
+                writeln!(
+                    w,
+                    "{}let {} = lele::kernels::less(&{}, &{}, {});",
+                    tab, outputs[0], inputs[0], inputs[1], buf_expr
+                )?;
+            }
+        }
         "Not" => writeln!(
             w,
             "{}let {} = lele::kernels::not(&{}, {});",
@@ -172,11 +197,23 @@ pub(crate) fn handle_math_ops(ctx: &mut OpContext, w: &mut dyn Write) -> std::io
             )?;
         }
         "Range" => {
-            writeln!(
-                w,
-                "{}let {} = lele::kernels::range(&{}, &{}, &{}, {});",
-                tab, outputs[0], inputs[0], inputs[1], inputs[2], buf_expr
-            )?;
+            let is_i64 = ctx.var_types.get(&inputs[0]).map(|t| t == "i64").unwrap_or(false)
+                || ctx.var_types.get(&inputs[1]).map(|t| t == "i64").unwrap_or(false)
+                || ctx.var_types.get(&inputs[2]).map(|t| t == "i64").unwrap_or(false);
+            if is_i64 {
+                writeln!(w, "{}let mut buf_{} = Vec::<i64>::new();", tab, outputs[0])?;
+                writeln!(
+                    w,
+                    "{}let {} = lele::kernels::range_i64(&{}, &{}, &{}, &mut buf_{});",
+                    tab, outputs[0], inputs[0], inputs[1], inputs[2], outputs[0]
+                )?;
+            } else {
+                writeln!(
+                    w,
+                    "{}let {} = lele::kernels::range(&{}, &{}, &{}, {});",
+                    tab, outputs[0], inputs[0], inputs[1], inputs[2], buf_expr
+                )?;
+            }
         }
         "Clip" => {
             let min = if inputs.len() > 1 && !inputs[1].is_empty() {
@@ -195,11 +232,23 @@ pub(crate) fn handle_math_ops(ctx: &mut OpContext, w: &mut dyn Write) -> std::io
                 tab, outputs[0], inputs[0], min, max, buf_expr
             )?;
         }
-        "Greater" => writeln!(
-            w,
-            "{}let {} = lele::kernels::less(&{}, &{}, {});",
-            tab, outputs[0], inputs[1], inputs[0], buf_expr
-        )?,
+        "Greater" => {
+            let is_i64 = ctx.var_types.get(&inputs[0]).map(|t| t == "i64").unwrap_or(false)
+                || ctx.var_types.get(&inputs[1]).map(|t| t == "i64").unwrap_or(false);
+            if is_i64 {
+                writeln!(
+                    w,
+                    "{}let {} = lele::kernels::less_i64(&{}, &{}, {});",
+                    tab, outputs[0], inputs[1], inputs[0], buf_expr
+                )?;
+            } else {
+                writeln!(
+                    w,
+                    "{}let {} = lele::kernels::less(&{}, &{}, {});",
+                    tab, outputs[0], inputs[1], inputs[0], buf_expr
+                )?;
+            }
+        }
         _ => return Ok(false),
     }
     Ok(true)

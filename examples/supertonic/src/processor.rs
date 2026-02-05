@@ -29,20 +29,28 @@ impl UnicodeProcessor {
         text_list: &[String],
         lang_list: &[String],
     ) -> Result<(Vec<Vec<i64>>, Vec<f32>, Vec<usize>)> {
+        println!("Debug: call input text_list len: {}", text_list.len());
         let mut processed_texts: Vec<String> = Vec::new();
         for (text, lang) in text_list.iter().zip(lang_list.iter()) {
-            processed_texts.push(preprocess_text(text, lang)?);
+            let processed = preprocess_text(text, lang)?;
+            println!("Debug: processed text: '{}'", processed);
+            processed_texts.push(processed);
         }
 
         let mut text_ids: Vec<Vec<i64>> = Vec::new();
         for text in processed_texts {
             let mut ids = Vec::new();
+            println!("Debug: processing chars len: {}", text.chars().count());
             for char_val in text.chars() {
                 let idx = char_val as usize;
+                let mut token_id = 0;
                 if idx < self.indexer.len() {
-                    let token_id = self.indexer[idx];
-                    ids.push(token_id);
+                    token_id = self.indexer[idx];
+                    if token_id == -1 {
+                        token_id = 0;
+                    }
                 }
+                ids.push(token_id);
             }
             text_ids.push(ids);
         }
@@ -141,15 +149,15 @@ pub fn sample_noisy_latent(
     latent_dim: i32,
 ) -> (Vec<f32>, Vec<usize>, Vec<f32>, Vec<usize>) {
     let bsz = duration.len();
-    let max_duration = duration.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let wav_len_max = (max_duration * sample_rate as f32) as usize;
+    let chunk_size = (base_chunk_size * chunk_compress) as usize;
 
     let wav_lengths: Vec<usize> = duration
         .iter()
         .map(|&d| (d * sample_rate as f32) as usize)
         .collect();
 
-    let chunk_size = (base_chunk_size * chunk_compress) as usize;
+    let wav_len_max = wav_lengths.iter().max().copied().unwrap_or(0);
+
     let latent_len = (wav_len_max + chunk_size - 1) / chunk_size;
     let latent_dim_val = (latent_dim * chunk_compress) as usize;
 

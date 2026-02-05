@@ -6,10 +6,10 @@ import numpy as np
 import onnxruntime as ort
 
 # Configuration
-CONFIG_PATH = "examples/supertonic/models/onnx/tts.json"
-MODELS_DIR = "examples/supertonic/models/onnx"
-INDEXER_PATH = "examples/supertonic/models/onnx/unicode_indexer.json"
-STYLE_PATH = "examples/supertonic/models/voice_styles/M1.json"
+CONFIG_PATH = "examples/supertonic/onnx/tts.json"
+MODELS_DIR = "examples/supertonic"
+INDEXER_PATH = "examples/supertonic/onnx/unicode_indexer.json"
+STYLE_PATH = "examples/supertonic/voice_styles/M1.json"
 
 def get_input_names(session):
     return [i.name for i in session.get_inputs()]
@@ -66,7 +66,7 @@ def main():
     
     dp_sess, te_sess, ve_sess, voc_sess = load_models()
     
-    text = "This is getting complex for a 1-shot implementation."
+    text = "The project now compiles successfully."
     tokens = process_text(text, indexer, lang="en")
     
     print(f"Text: {text}")
@@ -86,6 +86,9 @@ def main():
         "text_mask": text_mask
     })
     durations = dp_outputs[0]
+    print(f"DEBUG: durations shape: {durations.shape}")
+    print(f"DEBUG: First 5 durations: {durations.flatten()[:5]}")
+    print(f"DEBUG: Total duration sum: {np.sum(durations)}")
     
     # 2. Text Encoder
     te_in = get_input_names(te_sess)
@@ -172,6 +175,10 @@ def main():
     print(f"  DP + TE: {voc_start - start_time - ve_time:.4f}s")
     print(f"  VE (5 steps): {ve_time:.4f}s")
     print(f"  Vocoder: {voc_time:.4f}s")
+
+    # write to output_ort.wav
+    from scipy.io import wavfile
+    wavfile.write("output_ort.wav", sample_rate, audio)
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,10 @@
+[model]
+source = "local"
+
+[[model.files]]
+path = "model.onnx"
+
+[codegen]
+class_name = "SileroVad"
+model_file = "model.onnx"
+custom_methods = []

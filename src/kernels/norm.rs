@@ -57,20 +57,37 @@ pub fn layer_norm<'b, 'a>(
     utils::ensure_capacity(out_buf, input.data.len());
     let out_slice =
         unsafe { std::slice::from_raw_parts_mut(out_buf.as_mut_ptr(), input.data.len()) };
-    let src = &input.data;
-    let gamma = &scale.data;
-    let beta = &bias.data;
-    for i in 0..outer_size {
-        let offset = i * norm_size;
-        let chunk = &src[offset..offset + norm_size];
-        let out_chunk = &mut out_slice[offset..offset + norm_size];
-        let sum: f32 = chunk.iter().sum();
-        let mean = sum / norm_size as f32;
-        let var_sum: f32 = chunk.iter().map(|&x| (x - mean) * (x - mean)).sum();
-        let var = var_sum / norm_size as f32;
-        let inv_std = 1.0 / (var + epsilon).sqrt();
-        for j in 0..norm_size {
-            out_chunk[j] = (chunk[j] - mean) * inv_std * gamma[j] + beta[j];
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        crate::kernels::avx::norm::layer_norm_x86(
+            input.data.as_ptr(),
+            scale.data.as_ptr(),
+            bias.data.as_ptr(),
+            out_buf.as_mut_ptr(),
+            norm_size,
+            outer_size,
+            epsilon,
+        );
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let src = &input.data;
+        let gamma = &scale.data;
+        let beta = &bias.data;
+        
+        for i in 0..outer_size {
+            let offset = i * norm_size;
+            let chunk = &src[offset..offset + norm_size];
+            let out_chunk = &mut out_slice[offset..offset + norm_size];
+            let sum: f32 = chunk.iter().sum();
+            let mean = sum / norm_size as f32;
+            let var_sum: f32 = chunk.iter().map(|&x| (x - mean) * (x - mean)).sum();
+            let var = var_sum / norm_size as f32;
+            let inv_std = 1.0 / (var + epsilon).sqrt();
+            for j in 0..norm_size {
+                out_chunk[j] = (chunk[j] - mean) * inv_std * gamma[j] + beta[j];
+            }
         }
     }
     TensorView {

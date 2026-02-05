@@ -144,13 +144,15 @@ impl<'a> SupertonicTts<'a> {
                 self.text_processor.call(&[chunk], &[lang.to_string()])?;
             let bsz = 1;
             let max_len = text_ids_vec[0].len();
-            let mut text_ids_f32 = vec![0.0f32; max_len];
+            println!("Debug: text_ids_vec[0] len: {}", max_len);
+            println!("Debug: text_ids_vec[0] content: {:?}", text_ids_vec[0]);
+            let mut text_ids_i64 = vec![0i64; max_len];
             for (i, &id) in text_ids_vec[0].iter().enumerate() {
-                text_ids_f32[i] = id as f32;
+                text_ids_i64[i] = id as i64;
             }
 
             let text_ids_shape = [bsz, max_len];
-            let text_ids_tv = TensorView::new(&text_ids_f32, &text_ids_shape);
+            let text_ids_tv = TensorView::new(&text_ids_i64, &text_ids_shape);
             let text_mask_tv = TensorView::new(&mask_data, &mask_shape);
             let style_dp_tv = TensorView::new(&style.dp_data, &style.dp_shape);
             let style_ttl_tv = TensorView::new(&style.ttl_data, &style.ttl_shape);
@@ -162,9 +164,15 @@ impl<'a> SupertonicTts<'a> {
                 text_mask_tv.clone(),
             );
             let mut duration = duration_tv.data.to_vec();
+            println!("Debug: Num tokens: {}", duration.len());
+            println!("Debug: First 5 durations: {:?}", duration.iter().take(5).collect::<Vec<_>>());
             for d in duration.iter_mut() {
                 *d /= speed;
             }
+
+            let total_duration_seconds: f32 = duration.iter().sum();
+            println!("Debug: Total duration seconds: {}", total_duration_seconds);
+            let duration_batch = vec![total_duration_seconds];
 
             // 2. Text Encoder
             let text_emb_tv =
@@ -173,7 +181,7 @@ impl<'a> SupertonicTts<'a> {
 
             // 3. Vector Estimator (Loop)
             let (mut xt_data, xt_shape, latent_mask_data, latent_mask_shape) = sample_noisy_latent(
-                &duration,
+                &duration_batch,
                 self.config.ae.sample_rate,
                 self.config.ae.base_chunk_size,
                 self.config.ttl.chunk_compress_factor,
@@ -215,12 +223,18 @@ impl<'a> SupertonicTts<'a> {
             }
 
             // 4. Vocoder
+            // Normalize latent before vocoder
+            for x in xt_data.iter_mut() {
+                *x *= 0.25;
+            }
+
             let xt_tv = TensorView::new(&xt_data, &xt_shape);
             let audio_tv = self.vocoder.forward(xt_tv);
 
             let audio_data = audio_tv.data.to_vec();
-            let audio_len = (duration[0] * self.config.ae.sample_rate as f32) as usize;
-            let actual_len = audio_data.len().min(audio_len);
+            let expected_len = (total_duration_seconds * self.config.ae.sample_rate as f32) as usize;
+            let actual_len = audio_data.len().min(expected_len);
+            
             full_audio.extend_from_slice(&audio_data[..actual_len]);
         }
 
@@ -239,9 +253,9 @@ fn main() -> Result<()> {
     println!("=== Supertonic TTS Pure Rust Inference ===");
     println!("Text: {}", text);
 
-    let weights_dir = Path::new("examples/supertonic/models/onnx");
-    let gen_dir = Path::new("examples/supertonic");
-    let voice_styles_dir = Path::new("examples/supertonic/models/voice_styles");
+    let weights_dir = Path::new("examples/supertonic/onnx");
+    let gen_dir = Path::new("examples/supertonic/src");
+    let voice_styles_dir = Path::new("examples/supertonic/voice_styles");
     let config_path = weights_dir.join("tts.json");
 
     println!("Loading weights...");

@@ -36,11 +36,24 @@ pub(crate) fn handle_control_flow_ops(
                 .unwrap();
             let cond = &inputs[0];
             let out_vars = outputs.join(", ");
-            writeln!(
-                w,
-                "{}let ({}) = if {}.data.get(0).map(|v| *v != 0.0).unwrap_or(false) {{",
-                tab, out_vars, cond
-            )?;
+            let cond_is_i64 = ctx
+                .var_types
+                .get(cond)
+                .map(|t| t == "i64")
+                .unwrap_or(false);
+            if cond_is_i64 {
+                writeln!(
+                    w,
+                    "{}let ({}) = if {}.data.get(0).map(|v| *v != 0).unwrap_or(false) {{",
+                    tab, out_vars, cond
+                )?;
+            } else {
+                writeln!(
+                    w,
+                    "{}let ({}) = if {}.data.get(0).map(|v| *v != 0.0).unwrap_or(false) {{",
+                    tab, out_vars, cond
+                )?;
+            }
 
             let then_nodes: Vec<&crate::model::onnx_proto::NodeProto> =
                 then_branch.node.iter().collect();
@@ -54,6 +67,7 @@ pub(crate) fn handle_control_flow_ops(
                 None, // Subgraphs have their own scope
                 ctx.current_id,
                 ctx.compiler,
+                ctx.var_types,
             )?;
 
             // Collect variables defined in then branch
@@ -103,6 +117,7 @@ pub(crate) fn handle_control_flow_ops(
                 None,
                 ctx.current_id,
                 ctx.compiler,
+                ctx.var_types,
             )?;
 
             let mut else_defined = HashSet::new();

@@ -1,4 +1,6 @@
 #!/bin/sh
 
-cargo run --bin lele_gen examples/silero/silero.onnx examples/silero SileroVad
-cargo run --release --example silero 
+# Build and run Silero VAD example with the new workspace structure
+# The build.rs will automatically generate code from model.onnx
+
+cargo run --release -p silero-example --bin silero -- fixtures/zh.wav

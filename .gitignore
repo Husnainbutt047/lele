@@ -14,3 +14,18 @@ Cargo.lock
 *_profile.json
 profile.json.gz
 .DS_Store
+
+# Generated model code in examples
+examples/*/src/*_weights.bin
+examples/*/src/sensevoice.rs
+examples/*/src/silerovad.rs
+examples/*/src/textencoder.rs
+examples/*/src/durationpredictor.rs
+examples/*/src/vectorestimator.rs
+examples/*/src/vocoder.rs
+
+# Example-specific targets
+examples/*/target/
+
+# Model cache
+/target/lele_cache/

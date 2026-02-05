@@ -129,3 +129,57 @@ fn linear<'c, 'd>(
 ) -> lele::tensor::TensorView<'d> {
     lele::kernels::matmul_fused_add(input, weight, bias, output_buf)
 }
+
+fn embedding_concat<'c, 'd>(
+    &self,
+    shape: &lele::tensor::TensorView<'c, i64>,
+    value: f32,
+    weight: lele::tensor::TensorView<'c>,
+    output_buf: &'d mut Vec<f32>,
+) -> lele::tensor::TensorView<'d> {
+    // ConstantOfShape + Concat pattern
+    // shape defines the shape of the constant tensor filled with `value`
+    // Then concatenate weight and the constant along axis 0
+    let const_shape: Vec<usize> = shape.data.iter().map(|&x| x as usize).collect();
+    let const_len: usize = const_shape.iter().product();
+    
+    output_buf.clear();
+    output_buf.reserve(weight.data.len() + const_len);
+    output_buf.extend_from_slice(&weight.data);
+    output_buf.resize(weight.data.len() + const_len, value);
+    
+    let mut out_shape = weight.shape.to_vec();
+    out_shape[0] += const_shape[0];
+    
+    lele::tensor::TensorView {
+        data: std::borrow::Cow::Borrowed(output_buf),
+        shape: std::borrow::Cow::Owned(out_shape),
+    }
+}
+
+fn embedding_concat_i64<'c, 'd>(
+    &self,
+    shape: &lele::tensor::TensorView<'c, i64>,
+    value: i64,
+    weight: lele::tensor::TensorView<'c, i64>,
+    output_buf: &'d mut Vec<i64>,
+) -> lele::tensor::TensorView<'d, i64> {
+    // ConstantOfShape + Concat pattern (i64)
+    // shape defines the shape of the constant tensor filled with `value`
+    // Then concatenate weight and the constant along axis 0
+    let const_shape: Vec<usize> = shape.data.iter().map(|&x| x as usize).collect();
+    let const_len: usize = const_shape.iter().product();
+
+    output_buf.clear();
+    output_buf.reserve(weight.data.len() + const_len);
+    output_buf.extend_from_slice(&weight.data);
+    output_buf.resize(weight.data.len() + const_len, value);
+
+    let mut out_shape = weight.shape.to_vec();
+    out_shape[0] += const_shape[0];
+
+    lele::tensor::TensorView {
+        data: std::borrow::Cow::Borrowed(output_buf),
+        shape: std::borrow::Cow::Owned(out_shape),
+    }
+}

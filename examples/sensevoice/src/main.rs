@@ -52,6 +52,7 @@ fn main() {
         (vec![0.01; num_samples], sr)
     };
 
+
     // Create frontend pipeline
     println!("--- Feature Extraction ---");
     let config = FeatureConfig {
@@ -77,6 +78,8 @@ fn main() {
     );
 
     // Apply CMVN normalization
+    // SenseVoice usually uses Global CMVN, and the working log shows mean=0.0
+    // let normalized_features = features;
     let cmvn = Cmvn::default();
 
     let start = Instant::now();
@@ -86,6 +89,14 @@ fn main() {
         normalized_features.shape,
         start.elapsed().as_secs_f64() * 1000.0
     );
+     // Dump features for Python verification
+    use std::io::Write;
+    let mut file = std::fs::File::create("features.bin").unwrap();
+    for x in normalized_features.data.iter() {
+        file.write_all(&x.to_le_bytes()).unwrap();
+    }
+    println!("✓ Dumped features to features.bin");
+
 
     // Debug: Print feature statistics
     let feat_min = normalized_features
@@ -115,9 +126,9 @@ fn main() {
         normalized_features
     };
 
-    let speech_lengths = TensorView::from_owned(vec![t as f32], vec![1]);
-    let language = TensorView::from_owned(vec![3.0], vec![1]); // Chinese
-    let text_norm = TensorView::from_owned(vec![0.0], vec![1]); // No text normalization
+    let speech_lengths = TensorView::from_owned(vec![t as i64], vec![1]);
+    let language = TensorView::from_owned(vec![3i64], vec![1]); // Shape [1]
+    let text_norm = TensorView::from_owned(vec![0i64], vec![1]); // Shape [1], 1=with itn
 
     println!("Input shapes:");
     println!("  speech: {:?}", speech.shape);
@@ -168,27 +179,21 @@ fn main() {
     );
 
     // Show some sample predictions for debugging
-    println!("\nSample token predictions (first 10 time steps):");
-    for t in 0..10.min(time_steps) {
+    println!("\nSample token predictions:");
+    for t in 0..time_steps {
         let offset = t * vocab_size;
         let logit_slice = &output.data[offset..offset + vocab_size];
 
-        // Get top 3 predictions
-        let mut top_indices: Vec<(usize, f32)> = logit_slice
+        // Get top 1 prediction
+        let (max_idx, max_val) = logit_slice
             .iter()
             .enumerate()
-            .map(|(i, &v)| (i, v))
-            .collect();
-        top_indices.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+            .unwrap();
 
-        print!("  t={}: ", t);
-        for (i, (token_id, logit)) in top_indices[..3].iter().enumerate() {
-            if i > 0 {
-                print!(", ");
-            }
-            print!("{}({:.2})", token_id, logit);
+        if max_idx != 0 {
+             println!("  t={}: {} ({:.2})", t, max_idx, max_val);
         }
-        println!();
     }
 
     // Also show logits statistics
@@ -212,7 +217,7 @@ fn main() {
         let token_id = logit_slice
             .iter()
             .enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+            .max_by(|(_, a): &(usize, &f32), (_, b): &(usize, &f32)| a.partial_cmp(b).unwrap())
             .map(|(idx, _)| idx)
             .unwrap();
         token_counts[token_id] += 1;

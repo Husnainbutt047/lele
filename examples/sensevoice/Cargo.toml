@@ -1,0 +1,15 @@
+[package]
+name = "sensevoice-example"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "sensevoice"
+path = "src/main.rs"
+
+[dependencies]
+lele = { workspace = true }
+
+[build-dependencies]
+lele-build = { workspace = true }

@@ -1,13 +1,9 @@
 use crate::kernels::utils;
 use crate::tensor::TensorView;
+use core::arch::aarch64::*;
+use core::arch::asm;
 use std::borrow::Cow;
 
-#[cfg(target_arch = "aarch64")]
-use core::arch::aarch64::*;
-#[cfg(target_arch = "aarch64")]
-use core::arch::asm;
-
-#[cfg(target_arch = "aarch64")]
 #[inline(always)]
 unsafe fn vdotq_u32_custom(mut acc: uint32x4_t, a: uint8x16_t, b: uint8x16_t) -> uint32x4_t {
     unsafe {

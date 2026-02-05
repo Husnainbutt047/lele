@@ -133,8 +133,10 @@ fn mat_mul_integer_u8<'a, 'b, 'c>(
     #[cfg(not(target_arch = "aarch64"))]
     {
         use crate::kernels::utils;
-        let zp_a = a_zero_point.map(|z| z.data[0] as f32).unwrap_or(0.0);
-        let zp_b = b_zero_point.map(|z| z.data[0] as f32).unwrap_or(0.0);
+        let zp_a_ref: &[u8] = a_zero_point.map(|z| z.data.as_ref()).unwrap_or(&[]);
+        let zp_b_ref: &[u8] = b_zero_point.map(|z| z.data.as_ref()).unwrap_or(&[]);
+        let zp_a_scalar = if zp_a_ref.len() == 1 { zp_a_ref[0] as f32 } else { 0.0 };
+        let zp_b_scalar = if zp_b_ref.len() == 1 { zp_b_ref[0] as f32 } else { 0.0 };
 
         let a_dims = a.shape.len();
         let b_dims = b.shape.len();
@@ -168,7 +170,12 @@ fn mat_mul_integer_u8<'a, 'b, 'c>(
             let out_data = &mut out[out_offset..out_offset + stride_out];
 
             for i in 0..m {
+                let global_row = b_i * m + i;
+                let zp_a = if zp_a_ref.len() > 1 { zp_a_ref[global_row % zp_a_ref.len()] as f32 } else { zp_a_scalar };
+                
                 for j in 0..n {
+                    let zp_b = if zp_b_ref.len() > 1 { zp_b_ref[j] as f32 } else { zp_b_scalar };
+                
                     let mut sum = 0.0;
                     for l in 0..k {
                         let val_a = a_data[i * k + l] as f32 - zp_a;
@@ -176,9 +183,13 @@ fn mat_mul_integer_u8<'a, 'b, 'c>(
                         sum += val_a * val_b;
                     }
 
-                    // Apply scale if provided (broadcast scalar)
+                    // Apply scale if provided
                     if let Some(scale_data) = scale {
-                        sum *= scale_data.data[0];
+                        if scale_data.data.len() == 1 {
+                            sum *= scale_data.data[0];
+                        } else {
+                            sum *= scale_data.data[j];
+                        }
                     }
 
                     // Apply bias if provided (per-column)
@@ -230,14 +241,7 @@ pub fn dynamic_quantize_linear<'a, 'b>(
     #[cfg(not(target_arch = "aarch64"))]
     {
         let len = x.data.len();
-        let cap_bytes = out_y_storage.capacity() * 4;
-        if cap_bytes < len {
-            out_y_storage.reserve((len + 3) / 4);
-        }
-
-        let ptr = out_y_storage.as_mut_ptr() as *mut u8;
-        let out_u8 = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
-
+        
         let mut min_val = f32::MAX;
         let mut max_val = f32::MIN;
         for &v in x.data.iter() {
@@ -262,13 +266,13 @@ pub fn dynamic_quantize_linear<'a, 'b>(
         out_zp.clear();
         out_zp.push(zp);
 
-        for i in 0..len {
-            out_u8[i] = (x.data[i] * inv_scale + zp).round().clamp(0.0, 255.0) as u8;
-        }
-
-        // Convert u8 output to f32
+        // Calculate and write directly to output
         out_y_storage.clear();
-        out_y_storage.extend(out_u8.iter().map(|&v| v as f32));
+        out_y_storage.reserve(len);
+        for i in 0..len {
+            let q = (x.data[i] * inv_scale + zp).round().clamp(0.0, 255.0);
+            out_y_storage.push(q);
+        }
 
         (
             TensorView::from_slice(out_y_storage, x.shape.to_vec()),

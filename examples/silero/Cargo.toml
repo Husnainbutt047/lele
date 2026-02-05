@@ -1,0 +1,19 @@
+[package]
+name = "silero-example"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "silero"
+path = "src/main.rs"
+
+[[bin]]
+name = "silero-bench"
+path = "src/benchmark.rs"
+
+[dependencies]
+lele = { workspace = true }
+
+[build-dependencies]
+lele-build = { workspace = true }

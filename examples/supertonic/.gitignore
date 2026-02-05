@@ -1,4 +1,6 @@
 models/
+onnx/
+voice_styles/
 durationpredictor.rs
 textencoder.rs
 vectorestimator.rs

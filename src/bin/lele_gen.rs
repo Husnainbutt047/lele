@@ -28,14 +28,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let compiler = lele::compiler::Compiler::new()
         .with_name(class_name)
-        .with_custom_method(r#"
-    fn embedding_concat<'c, 'd>(&self, shape: &lele::tensor::TensorView<'c>, input_val: f32, weight: lele::tensor::TensorView<'c>, output_buf: &'d mut Vec<f32>) -> lele::tensor::TensorView<'d> 
-    {
-         let mut buf_cos = Vec::<f32>::new();
-         let cos = lele::kernels::constant_of_shape(shape, input_val, &mut buf_cos);
-         lele::kernels::concat(&[&weight, &cos], 0, output_buf)
-    }
-"#)
         .with_default_optimizations();
     let result = compiler.compile(graph)?;
     let weights_filename = format!("{}_weights.bin", class_name.to_lowercase());

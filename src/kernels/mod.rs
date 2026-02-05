@@ -3,7 +3,10 @@ pub mod conv1d;
 pub mod gemm;
 pub mod manipulation;
 pub mod math;
+#[cfg(target_arch = "aarch64")]
 pub mod neon;
+#[cfg(target_arch = "x86_64")]
+pub mod avx;
 pub mod norm;
 pub mod pooling;
 pub mod quantization;

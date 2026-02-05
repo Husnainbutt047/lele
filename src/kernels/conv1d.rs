@@ -1,9 +1,9 @@
 use crate::kernels::utils;
 use crate::tensor::TensorView;
 use faer::{
-    Parallelism,
+    Accum, Par,
     linalg::matmul::matmul,
-    mat::{from_raw_parts, from_raw_parts_mut},
+    mat::{MatRef, MatMut},
 };
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::*;
@@ -941,6 +941,62 @@ pub fn conv1d_fused<'b, 'a>(
         return TensorView::from_slice(out, vec![batch_size, out_channels, output_len]);
     }
 
+    #[cfg(target_arch = "x86_64")]
+    if group as usize == in_channels
+       && group as usize == out_channels       
+       && (stride == 1 || stride == 2)
+    {
+         // Depthwise Convolution
+         let bias_ptr = bias.map(|b| b.data.as_ptr());
+         unsafe {
+             crate::kernels::avx::conv1d::conv1d_dw_x86(
+                 batch_size,
+                 in_channels,
+                 input_len,
+                 out_channels,
+                 pad_left, // Assuming symmetric padding or handling verify?
+                 stride,
+                 output_len,
+                 kernel_size,
+                 relu,
+                 bias_ptr,
+                 input.data.as_ptr(),
+                 weights.data.as_ptr(),
+                 out.as_mut_ptr(),
+             );
+         }
+         return TensorView::from_slice(out, vec![batch_size, out_channels, output_len]);
+    }
+    
+    #[cfg(target_arch = "x86_64")]
+    if group == 1
+        && kernel_size == 3
+        && dilation == 1
+        && (stride == 1 || stride == 2)
+        && pad_left == 1
+        && pad_right == 1
+    {
+        let bias_ptr = bias.map(|b| b.data.as_ptr());
+        unsafe {
+            crate::kernels::avx::conv1d::conv1d_direct_k3_x86(
+                batch_size,
+                in_channels,
+                input_len,
+                out_channels,
+                1,
+                stride,
+                output_len,
+                relu,
+                bias_ptr,
+                input.data.as_ptr(),
+                weights.data.as_ptr(),
+                out.as_mut_ptr(),
+            );
+        }
+
+        return TensorView::from_slice(out, vec![batch_size, out_channels, output_len]);
+    }
+
     let unfolded_size = unfolded_rows * output_len;
 
     thread_local! {
@@ -1030,28 +1086,28 @@ pub fn conv1d_fused<'b, 'a>(
                     (g * out_channels_per_group) * in_channels_per_group * kernel_size;
                 let out_group_offset = (b * out_channels + g * out_channels_per_group) * output_len;
                 unsafe {
-                    let a = from_raw_parts::<f32>(
+                    let a = MatRef::<f32>::from_raw_parts(
                         weights.data.as_ptr().add(weight_group_offset),
                         out_channels_per_group,
                         unfolded_rows,
                         unfolded_rows as isize,
                         1,
                     );
-                    let b = from_raw_parts::<f32>(
+                    let b = MatRef::<f32>::from_raw_parts(
                         unf_ptr,
                         unfolded_rows,
                         output_len,
                         output_len as isize,
                         1,
                     );
-                    let c = from_raw_parts_mut::<f32>(
+                    let c = MatMut::<f32>::from_raw_parts_mut(
                         out.as_mut_ptr().add(out_group_offset),
                         out_channels_per_group,
                         output_len,
                         output_len as isize,
                         1,
                     );
-                    matmul(c, a, b, None, 1.0f32, Parallelism::None);
+                    matmul(c, Accum::Replace, a, b, 1.0f32, Par::Seq);
                 }
             }
         }
@@ -1124,7 +1180,19 @@ pub fn conv1d_fused<'b, 'a>(
                 }
             }
         }
-        #[cfg(not(target_arch = "aarch64"))]
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            crate::kernels::avx::conv1d::fuse_bias_relu_x86(
+                out.as_mut_ptr(),
+                bias.map(|b| b.data.as_ptr()),
+                relu,
+                batch_size,
+                out_channels,
+                output_len,
+            );
+        }
+
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
         unsafe {
             let out_ptr = out.as_mut_ptr();
             if let Some(b_vec) = bias {
@@ -1193,5 +1261,37 @@ mod tests {
         let res = conv1d(&input, &weights, None, &[1], 1, &[0, 0], &[1], &mut out);
         assert_eq!(res.shape, vec![1, 1, 2]);
         assert_eq!(res.data, vec![3.0, 5.0]);
+    }
+
+    #[test]
+    fn test_conv1d_k3_opt() {
+        // Input: 1 batch, 1 input channel, L=10
+        let input_len = 10;
+        let input_data: Vec<f32> = (0..input_len).map(|x| x as f32).collect();
+        let input = TensorView::from_slice(&input_data, vec![1, 1, input_len]);
+        
+        // Weights: 1 output channel, 1 input channel, K=3
+        // Filter [1, 1, 1] acts as sum of 3 window.
+        let weight_data = vec![1.0, 1.0, 1.0];
+        let weights = TensorView::from_slice(&weight_data, vec![1, 1, 3]);
+        
+        let mut out = Vec::new();
+        // Pad=1, Stride=1
+        // Dilation defaults to 1 passed as array? No, call needs `dilations` slice.
+        // `conv1d` arg signature: ..., dilation: &[i64], group: i64, padding: &[i64], stride: &[i64], ...
+        
+        let res = conv1d(&input, &weights, None, &[1], 1, &[1, 1], &[1], &mut out);
+        
+        assert_eq!(res.shape, vec![1, 1, 10]);
+        // T=0:  0(pad), 0, 1 -> 1
+        // T=1:  0, 1, 2      -> 3
+        // T=i: (i-1)+i+(i+1) = 3i
+        // T=9: 8, 9, 0(pad)  -> 17
+        
+        let out_data = res.data;
+        assert_eq!(out_data[0], 1.0);
+        assert_eq!(out_data[1], 3.0);
+        assert_eq!(out_data[5], 15.0); // 3*5
+        assert_eq!(out_data[9], 17.0);
     }
 }
