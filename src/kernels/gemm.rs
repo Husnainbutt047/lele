@@ -1,8 +1,8 @@
 use crate::kernels::utils;
 use crate::tensor::TensorView;
-use faer::{Accum, Par};
 use faer::linalg::matmul::matmul as faer_matmul;
-use faer::mat::{MatRef, MatMut};
+use faer::mat::{MatMut, MatRef};
+use faer::{Accum, Par};
 use std::borrow::Cow;
 
 #[cfg(target_arch = "x86_64")]
@@ -54,8 +54,10 @@ pub fn matmul<'a>(
         let out_offset = b_i * stride_out;
 
         unsafe {
-            let a_mat = MatRef::<f32>::from_raw_parts(a.data.as_ptr().add(a_offset), m, k, k as isize, 1);
-            let b_mat = MatRef::<f32>::from_raw_parts(b.data.as_ptr().add(b_offset), k, n, n as isize, 1);
+            let a_mat =
+                MatRef::<f32>::from_raw_parts(a.data.as_ptr().add(a_offset), m, k, k as isize, 1);
+            let b_mat =
+                MatRef::<f32>::from_raw_parts(b.data.as_ptr().add(b_offset), k, n, n as isize, 1);
             let out_mat = MatMut::<f32>::from_raw_parts_mut(
                 out_slice.as_mut_ptr().add(out_offset),
                 m,

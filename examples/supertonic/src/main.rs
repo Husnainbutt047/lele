@@ -167,7 +167,10 @@ impl<'a> SupertonicTts<'a> {
             println!("Debug: duration_tv data len: {}", duration_tv.data.len());
             let mut duration = duration_tv.data.to_vec();
             println!("Debug: Num tokens: {}", duration.len());
-            println!("Debug: First 5 durations: {:?}", duration.iter().take(5).collect::<Vec<_>>());
+            println!(
+                "Debug: First 5 durations: {:?}",
+                duration.iter().take(5).collect::<Vec<_>>()
+            );
             for d in duration.iter_mut() {
                 *d /= speed;
             }
@@ -220,9 +223,10 @@ impl<'a> SupertonicTts<'a> {
             let audio_tv = self.vocoder.forward(xt_tv);
 
             let audio_data = audio_tv.data.to_vec();
-            let expected_len = (total_duration_seconds * self.config.ae.sample_rate as f32) as usize;
+            let expected_len =
+                (total_duration_seconds * self.config.ae.sample_rate as f32) as usize;
             let actual_len = audio_data.len().min(expected_len);
-            
+
             full_audio.extend_from_slice(&audio_data[..actual_len]);
         }
 

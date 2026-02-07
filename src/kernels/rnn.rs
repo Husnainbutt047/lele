@@ -1,8 +1,8 @@
 use crate::kernels::activations::{sigmoid, tanh};
 use crate::tensor::TensorView;
-use faer::{Accum, Par};
 use faer::linalg::matmul::matmul;
-use faer::mat::{MatRef, MatMut};
+use faer::mat::{MatMut, MatRef};
+use faer::{Accum, Par};
 
 pub fn lstm<'b, 'a>(
     input: &TensorView<'b>,
@@ -76,7 +76,13 @@ pub fn lstm<'b, 'a>(
             // R * h_{t-1}
             // R: [4*H, H]
             // out_h: [H]
-            let a = MatRef::<f32>::from_raw_parts(r_data.as_ptr(), m, hidden_size, hidden_size as isize, 1);
+            let a = MatRef::<f32>::from_raw_parts(
+                r_data.as_ptr(),
+                m,
+                hidden_size,
+                hidden_size as isize,
+                1,
+            );
             let b = MatRef::<f32>::from_raw_parts(out_h.as_ptr(), hidden_size, 1, 1, 1);
             let c = MatMut::<f32>::from_raw_parts_mut(r_contribution.as_mut_ptr(), m, 1, 1, 1);
 

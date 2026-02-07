@@ -75,7 +75,8 @@ pub fn download_from_hf_hub(
     revision: Option<&str>,
     cache_dir: Option<&Path>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let base = std::env::var("HF_ENDPOINT").unwrap_or_else(|_| "https://huggingface.co".to_string());
+    let base =
+        std::env::var("HF_ENDPOINT").unwrap_or_else(|_| "https://huggingface.co".to_string());
     if std::env::var("HF_ENDPOINT").is_ok() {
         println!("cargo:warning=Using HF mirror: {}", base);
     }
@@ -109,16 +110,18 @@ pub fn download_from_url(url: &str, dest: &Path) -> Result<PathBuf, Box<dyn std:
         .build();
     let agent = ureq::Agent::new_with_config(config);
     let response = agent.get(url).call()?;
-    
+
     println!("cargo:warning=Response status: {}", response.status());
     if !response.status().is_success() {
         return Err(format!("Download failed with status: {}", response.status()).into());
     }
 
-    let content_len = response.headers().get("content-length")
+    let content_len = response
+        .headers()
+        .get("content-length")
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.parse::<u64>().ok());
-    
+
     if let Some(len) = content_len {
         println!("cargo:warning=Downloading {} bytes...", len);
     }

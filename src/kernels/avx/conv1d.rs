@@ -22,253 +22,253 @@ pub unsafe fn conv1d_direct_k3_x86(
     let out_stride_ch = output_len;
     let zero_v = _mm256_setzero_ps();
 
-  unsafe {
-    for b in 0..batch_size {
-        let in_base = input.add(b * in_channels * input_len);
-        let out_base = output.add(b * out_channels * output_len);
+    unsafe {
+        for b in 0..batch_size {
+            let in_base = input.add(b * in_channels * input_len);
+            let out_base = output.add(b * out_channels * output_len);
 
-        let mut oc = 0;
-        // Process 4 Output Channels at a time
-        while oc + 4 <= out_channels {
-            let w_base0 = weights.add(oc * w_stride_oc);
-            let w_base1 = weights.add((oc + 1) * w_stride_oc);
-            let w_base2 = weights.add((oc + 2) * w_stride_oc);
-            let w_base3 = weights.add((oc + 3) * w_stride_oc);
+            let mut oc = 0;
+            // Process 4 Output Channels at a time
+            while oc + 4 <= out_channels {
+                let w_base0 = weights.add(oc * w_stride_oc);
+                let w_base1 = weights.add((oc + 1) * w_stride_oc);
+                let w_base2 = weights.add((oc + 2) * w_stride_oc);
+                let w_base3 = weights.add((oc + 3) * w_stride_oc);
 
-            let out_ptr0 = out_base.add(oc * out_stride_ch);
-            let out_ptr1 = out_base.add((oc + 1) * out_stride_ch);
-            let out_ptr2 = out_base.add((oc + 2) * out_stride_ch);
-            let out_ptr3 = out_base.add((oc + 3) * out_stride_ch);
+                let out_ptr0 = out_base.add(oc * out_stride_ch);
+                let out_ptr1 = out_base.add((oc + 1) * out_stride_ch);
+                let out_ptr2 = out_base.add((oc + 2) * out_stride_ch);
+                let out_ptr3 = out_base.add((oc + 3) * out_stride_ch);
 
-            let mut t = 0;
-            
-            // Only optimize stride=1 loop with AVX for now
-            if stride == 1 {
-                while t + 8 <= output_len {
-                    // Accumulators for 8 time steps
-                    let mut acc0 = zero_v;
-                    let mut acc1 = zero_v;
-                    let mut acc2 = zero_v;
-                    let mut acc3 = zero_v;
+                let mut t = 0;
 
-                    // Compute start index in input
-                    let t_in_start = (t as isize) - (padding as isize);
-                    let safe_start = t_in_start >= 0;
-                    
-                    let limit = input_len as isize;
-                    let safe_end = (t_in_start + 9) < limit; 
+                // Only optimize stride=1 loop with AVX for now
+                if stride == 1 {
+                    while t + 8 <= output_len {
+                        // Accumulators for 8 time steps
+                        let mut acc0 = zero_v;
+                        let mut acc1 = zero_v;
+                        let mut acc2 = zero_v;
+                        let mut acc3 = zero_v;
 
-                    if safe_start && safe_end {
-                        // Fast path: direct loads
-                        for ic in 0..in_channels {
-                            let in_ptr_base = in_base.add(ic * in_stride_ch);
-                            
-                            // Because unaligned loads are cheap on AVX2
-                            let v_left = _mm256_loadu_ps(in_ptr_base.offset(t_in_start - 1));
-                            let v_center = _mm256_loadu_ps(in_ptr_base.offset(t_in_start));
-                            let v_right = _mm256_loadu_ps(in_ptr_base.offset(t_in_start + 1));
-                            
-                            // Weights
-                            let w0 = w_base0.add(ic * 3);
-                            let w1 = w_base1.add(ic * 3);
-                            let w2 = w_base2.add(ic * 3);
-                            let w3 = w_base3.add(ic * 3);
-                            
-                            let k0_0 = _mm256_broadcast_ss(&*w0);
-                            let k0_1 = _mm256_broadcast_ss(&*w0.add(1));
-                            let k0_2 = _mm256_broadcast_ss(&*w0.add(2));
-                            
-                            acc0 = _mm256_fmadd_ps(v_left, k0_0, acc0);
-                            acc0 = _mm256_fmadd_ps(v_center, k0_1, acc0);
-                            acc0 = _mm256_fmadd_ps(v_right, k0_2, acc0);
+                        // Compute start index in input
+                        let t_in_start = (t as isize) - (padding as isize);
+                        let safe_start = t_in_start >= 0;
 
-                            let k1_0 = _mm256_broadcast_ss(&*w1);
-                            let k1_1 = _mm256_broadcast_ss(&*w1.add(1));
-                            let k1_2 = _mm256_broadcast_ss(&*w1.add(2));
-                            acc1 = _mm256_fmadd_ps(v_left, k1_0, acc1);
-                            acc1 = _mm256_fmadd_ps(v_center, k1_1, acc1);
-                            acc1 = _mm256_fmadd_ps(v_right, k1_2, acc1);
+                        let limit = input_len as isize;
+                        let safe_end = (t_in_start + 9) < limit;
 
-                            let k2_0 = _mm256_broadcast_ss(&*w2);
-                            let k2_1 = _mm256_broadcast_ss(&*w2.add(1));
-                            let k2_2 = _mm256_broadcast_ss(&*w2.add(2));
-                            acc2 = _mm256_fmadd_ps(v_left, k2_0, acc2);
-                            acc2 = _mm256_fmadd_ps(v_center, k2_1, acc2);
-                            acc2 = _mm256_fmadd_ps(v_right, k2_2, acc2);
+                        if safe_start && safe_end {
+                            // Fast path: direct loads
+                            for ic in 0..in_channels {
+                                let in_ptr_base = in_base.add(ic * in_stride_ch);
 
-                            let k3_0 = _mm256_broadcast_ss(&*w3);
-                            let k3_1 = _mm256_broadcast_ss(&*w3.add(1));
-                            let k3_2 = _mm256_broadcast_ss(&*w3.add(2));
-                            acc3 = _mm256_fmadd_ps(v_left, k3_0, acc3);
-                            acc3 = _mm256_fmadd_ps(v_center, k3_1, acc3);
-                            acc3 = _mm256_fmadd_ps(v_right, k3_2, acc3);
-                        }
-                    } else {
-                        // Slow path (boundary) handling
-                         for ic in 0..in_channels {
-                            let in_ptr_base = in_base.add(ic * in_stride_ch);
-                            // Load using scalar loads into temporary array
-                            let mut tmp = [0.0f32; 10]; // t-1 to t+8 (10 elements)
-                            for k in 0..10 {
-                                let idx = t_in_start - 1 + k as isize;
-                                if idx >= 0 && idx < limit {
-                                    tmp[k] = *in_ptr_base.add(idx as usize);
-                                }
+                                // Because unaligned loads are cheap on AVX2
+                                let v_left = _mm256_loadu_ps(in_ptr_base.offset(t_in_start - 1));
+                                let v_center = _mm256_loadu_ps(in_ptr_base.offset(t_in_start));
+                                let v_right = _mm256_loadu_ps(in_ptr_base.offset(t_in_start + 1));
+
+                                // Weights
+                                let w0 = w_base0.add(ic * 3);
+                                let w1 = w_base1.add(ic * 3);
+                                let w2 = w_base2.add(ic * 3);
+                                let w3 = w_base3.add(ic * 3);
+
+                                let k0_0 = _mm256_broadcast_ss(&*w0);
+                                let k0_1 = _mm256_broadcast_ss(&*w0.add(1));
+                                let k0_2 = _mm256_broadcast_ss(&*w0.add(2));
+
+                                acc0 = _mm256_fmadd_ps(v_left, k0_0, acc0);
+                                acc0 = _mm256_fmadd_ps(v_center, k0_1, acc0);
+                                acc0 = _mm256_fmadd_ps(v_right, k0_2, acc0);
+
+                                let k1_0 = _mm256_broadcast_ss(&*w1);
+                                let k1_1 = _mm256_broadcast_ss(&*w1.add(1));
+                                let k1_2 = _mm256_broadcast_ss(&*w1.add(2));
+                                acc1 = _mm256_fmadd_ps(v_left, k1_0, acc1);
+                                acc1 = _mm256_fmadd_ps(v_center, k1_1, acc1);
+                                acc1 = _mm256_fmadd_ps(v_right, k1_2, acc1);
+
+                                let k2_0 = _mm256_broadcast_ss(&*w2);
+                                let k2_1 = _mm256_broadcast_ss(&*w2.add(1));
+                                let k2_2 = _mm256_broadcast_ss(&*w2.add(2));
+                                acc2 = _mm256_fmadd_ps(v_left, k2_0, acc2);
+                                acc2 = _mm256_fmadd_ps(v_center, k2_1, acc2);
+                                acc2 = _mm256_fmadd_ps(v_right, k2_2, acc2);
+
+                                let k3_0 = _mm256_broadcast_ss(&*w3);
+                                let k3_1 = _mm256_broadcast_ss(&*w3.add(1));
+                                let k3_2 = _mm256_broadcast_ss(&*w3.add(2));
+                                acc3 = _mm256_fmadd_ps(v_left, k3_0, acc3);
+                                acc3 = _mm256_fmadd_ps(v_center, k3_1, acc3);
+                                acc3 = _mm256_fmadd_ps(v_right, k3_2, acc3);
                             }
-                            
-                            let v_left = _mm256_loadu_ps(tmp.as_ptr());
-                            let v_center = _mm256_loadu_ps(tmp.as_ptr().add(1));
-                            let v_right = _mm256_loadu_ps(tmp.as_ptr().add(2));
-                            
-                             // Weights
-                            let w0 = w_base0.add(ic * 3);
-                            let w1 = w_base1.add(ic * 3);
-                            let w2 = w_base2.add(ic * 3);
-                            let w3 = w_base3.add(ic * 3);
-                            
-                            let k0_0 = _mm256_broadcast_ss(&*w0);
-                            let k0_1 = _mm256_broadcast_ss(&*w0.add(1));
-                            let k0_2 = _mm256_broadcast_ss(&*w0.add(2));
-                            acc0 = _mm256_fmadd_ps(v_left, k0_0, acc0);
-                            acc0 = _mm256_fmadd_ps(v_center, k0_1, acc0);
-                            acc0 = _mm256_fmadd_ps(v_right, k0_2, acc0);
+                        } else {
+                            // Slow path (boundary) handling
+                            for ic in 0..in_channels {
+                                let in_ptr_base = in_base.add(ic * in_stride_ch);
+                                // Load using scalar loads into temporary array
+                                let mut tmp = [0.0f32; 10]; // t-1 to t+8 (10 elements)
+                                for k in 0..10 {
+                                    let idx = t_in_start - 1 + k as isize;
+                                    if idx >= 0 && idx < limit {
+                                        tmp[k] = *in_ptr_base.add(idx as usize);
+                                    }
+                                }
 
-                            let k1_0 = _mm256_broadcast_ss(&*w1);
-                            let k1_1 = _mm256_broadcast_ss(&*w1.add(1));
-                            let k1_2 = _mm256_broadcast_ss(&*w1.add(2));
-                            acc1 = _mm256_fmadd_ps(v_left, k1_0, acc1);
-                            acc1 = _mm256_fmadd_ps(v_center, k1_1, acc1);
-                            acc1 = _mm256_fmadd_ps(v_right, k1_2, acc1);
+                                let v_left = _mm256_loadu_ps(tmp.as_ptr());
+                                let v_center = _mm256_loadu_ps(tmp.as_ptr().add(1));
+                                let v_right = _mm256_loadu_ps(tmp.as_ptr().add(2));
 
-                            let k2_0 = _mm256_broadcast_ss(&*w2);
-                            let k2_1 = _mm256_broadcast_ss(&*w2.add(1));
-                            let k2_2 = _mm256_broadcast_ss(&*w2.add(2));
-                            acc2 = _mm256_fmadd_ps(v_left, k2_0, acc2);
-                            acc2 = _mm256_fmadd_ps(v_center, k2_1, acc2);
-                            acc2 = _mm256_fmadd_ps(v_right, k2_2, acc2);
+                                // Weights
+                                let w0 = w_base0.add(ic * 3);
+                                let w1 = w_base1.add(ic * 3);
+                                let w2 = w_base2.add(ic * 3);
+                                let w3 = w_base3.add(ic * 3);
 
-                            let k3_0 = _mm256_broadcast_ss(&*w3);
-                            let k3_1 = _mm256_broadcast_ss(&*w3.add(1));
-                            let k3_2 = _mm256_broadcast_ss(&*w3.add(2));
-                            acc3 = _mm256_fmadd_ps(v_left, k3_0, acc3);
-                            acc3 = _mm256_fmadd_ps(v_center, k3_1, acc3);
-                            acc3 = _mm256_fmadd_ps(v_right, k3_2, acc3);
+                                let k0_0 = _mm256_broadcast_ss(&*w0);
+                                let k0_1 = _mm256_broadcast_ss(&*w0.add(1));
+                                let k0_2 = _mm256_broadcast_ss(&*w0.add(2));
+                                acc0 = _mm256_fmadd_ps(v_left, k0_0, acc0);
+                                acc0 = _mm256_fmadd_ps(v_center, k0_1, acc0);
+                                acc0 = _mm256_fmadd_ps(v_right, k0_2, acc0);
+
+                                let k1_0 = _mm256_broadcast_ss(&*w1);
+                                let k1_1 = _mm256_broadcast_ss(&*w1.add(1));
+                                let k1_2 = _mm256_broadcast_ss(&*w1.add(2));
+                                acc1 = _mm256_fmadd_ps(v_left, k1_0, acc1);
+                                acc1 = _mm256_fmadd_ps(v_center, k1_1, acc1);
+                                acc1 = _mm256_fmadd_ps(v_right, k1_2, acc1);
+
+                                let k2_0 = _mm256_broadcast_ss(&*w2);
+                                let k2_1 = _mm256_broadcast_ss(&*w2.add(1));
+                                let k2_2 = _mm256_broadcast_ss(&*w2.add(2));
+                                acc2 = _mm256_fmadd_ps(v_left, k2_0, acc2);
+                                acc2 = _mm256_fmadd_ps(v_center, k2_1, acc2);
+                                acc2 = _mm256_fmadd_ps(v_right, k2_2, acc2);
+
+                                let k3_0 = _mm256_broadcast_ss(&*w3);
+                                let k3_1 = _mm256_broadcast_ss(&*w3.add(1));
+                                let k3_2 = _mm256_broadcast_ss(&*w3.add(2));
+                                acc3 = _mm256_fmadd_ps(v_left, k3_0, acc3);
+                                acc3 = _mm256_fmadd_ps(v_center, k3_1, acc3);
+                                acc3 = _mm256_fmadd_ps(v_right, k3_2, acc3);
+                            }
+                        }
+
+                        // Store results
+                        if bias.is_some() {
+                            let b_ptr = bias.unwrap().add(oc);
+                            let b0 = _mm256_broadcast_ss(&*b_ptr);
+                            let b1 = _mm256_broadcast_ss(&*b_ptr.add(1));
+                            let b2 = _mm256_broadcast_ss(&*b_ptr.add(2));
+                            let b3 = _mm256_broadcast_ss(&*b_ptr.add(3));
+                            acc0 = _mm256_add_ps(acc0, b0);
+                            acc1 = _mm256_add_ps(acc1, b1);
+                            acc2 = _mm256_add_ps(acc2, b2);
+                            acc3 = _mm256_add_ps(acc3, b3);
+                        }
+
+                        if relu {
+                            acc0 = _mm256_max_ps(acc0, zero_v);
+                            acc1 = _mm256_max_ps(acc1, zero_v);
+                            acc2 = _mm256_max_ps(acc2, zero_v);
+                            acc3 = _mm256_max_ps(acc3, zero_v);
+                        }
+
+                        _mm256_storeu_ps(out_ptr0.add(t), acc0);
+                        _mm256_storeu_ps(out_ptr1.add(t), acc1);
+                        _mm256_storeu_ps(out_ptr2.add(t), acc2);
+                        _mm256_storeu_ps(out_ptr3.add(t), acc3);
+
+                        t += 8;
+                    }
+                } // end stride=1 check
+
+                // Cleanup loop (handles stride!=1 OR remaining t)
+                while t < output_len {
+                    let t_in_start = (t * stride) as isize - (padding as isize);
+                    let mut s0 = 0.0;
+                    let mut s1 = 0.0;
+                    let mut s2 = 0.0;
+                    let mut s3 = 0.0;
+
+                    for ic in 0..in_channels {
+                        let in_ptr_base = in_base.add(ic * in_stride_ch);
+                        let w0 = w_base0.add(ic * 3);
+                        let w1 = w_base1.add(ic * 3);
+                        let w2 = w_base2.add(ic * 3);
+                        let w3 = w_base3.add(ic * 3);
+
+                        // Convolve 3 elements
+                        for k in 0..3 {
+                            let idx = t_in_start + k;
+                            if idx >= 0 && idx < (input_len as isize) {
+                                let val = *in_ptr_base.add(idx as usize);
+                                s0 += val * *w0.add(k as usize);
+                                s1 += val * *w1.add(k as usize);
+                                s2 += val * *w2.add(k as usize);
+                                s3 += val * *w3.add(k as usize);
+                            }
                         }
                     }
 
-                    // Store results
-                    if bias.is_some() {
-                        let b_ptr = bias.unwrap().add(oc);
-                        let b0 = _mm256_broadcast_ss(&*b_ptr);
-                        let b1 = _mm256_broadcast_ss(&*b_ptr.add(1));
-                        let b2 = _mm256_broadcast_ss(&*b_ptr.add(2));
-                        let b3 = _mm256_broadcast_ss(&*b_ptr.add(3));
-                        acc0 = _mm256_add_ps(acc0, b0);
-                        acc1 = _mm256_add_ps(acc1, b1);
-                        acc2 = _mm256_add_ps(acc2, b2);
-                        acc3 = _mm256_add_ps(acc3, b3);
+                    if let Some(b) = bias {
+                        s0 += *b.add(oc);
+                        s1 += *b.add(oc + 1);
+                        s2 += *b.add(oc + 2);
+                        s3 += *b.add(oc + 3);
                     }
-                    
+
                     if relu {
-                        acc0 = _mm256_max_ps(acc0, zero_v);
-                        acc1 = _mm256_max_ps(acc1, zero_v);
-                        acc2 = _mm256_max_ps(acc2, zero_v);
-                        acc3 = _mm256_max_ps(acc3, zero_v);
+                        s0 = s0.max(0.0);
+                        s1 = s1.max(0.0);
+                        s2 = s2.max(0.0);
+                        s3 = s3.max(0.0);
                     }
 
-                    _mm256_storeu_ps(out_ptr0.add(t), acc0);
-                    _mm256_storeu_ps(out_ptr1.add(t), acc1);
-                    _mm256_storeu_ps(out_ptr2.add(t), acc2);
-                    _mm256_storeu_ps(out_ptr3.add(t), acc3);
+                    *out_ptr0.add(t) = s0;
+                    *out_ptr1.add(t) = s1;
+                    *out_ptr2.add(t) = s2;
+                    *out_ptr3.add(t) = s3;
 
-                    t += 8;
+                    t += 1;
                 }
-            } // end stride=1 check
-            
-            // Cleanup loop (handles stride!=1 OR remaining t)
-            while t < output_len {
-                 let t_in_start = (t * stride) as isize - (padding as isize);
-                 let mut s0 = 0.0;
-                 let mut s1 = 0.0;
-                 let mut s2 = 0.0;
-                 let mut s3 = 0.0;
-                 
-                 for ic in 0..in_channels {
-                     let in_ptr_base = in_base.add(ic * in_stride_ch);
-                     let w0 = w_base0.add(ic * 3);
-                     let w1 = w_base1.add(ic * 3);
-                     let w2 = w_base2.add(ic * 3);
-                     let w3 = w_base3.add(ic * 3);
-                     
-                     // Convolve 3 elements
-                     for k in 0..3 {
-                         let idx = t_in_start + k;
-                         if idx >= 0 && idx < (input_len as isize) {
-                             let val = *in_ptr_base.add(idx as usize);
-                             s0 += val * *w0.add(k as usize);
-                             s1 += val * *w1.add(k as usize);
-                             s2 += val * *w2.add(k as usize);
-                             s3 += val * *w3.add(k as usize);
-                         }
-                     }
-                 }
-                 
-                 if let Some(b) = bias {
-                     s0 += *b.add(oc);
-                     s1 += *b.add(oc + 1);
-                     s2 += *b.add(oc + 2);
-                     s3 += *b.add(oc + 3);
-                 }
-                 
-                 if relu {
-                     s0 = s0.max(0.0);
-                     s1 = s1.max(0.0);
-                     s2 = s2.max(0.0);
-                     s3 = s3.max(0.0);
-                 }
-                 
-                 *out_ptr0.add(t) = s0;
-                 *out_ptr1.add(t) = s1;
-                 *out_ptr2.add(t) = s2;
-                 *out_ptr3.add(t) = s3;
-                 
-                 t += 1;
+
+                oc += 4;
             }
 
-            oc += 4;
-        }
+            // Handle remaining OCs (scalar loop for now, or just unroll generic)
+            while oc < out_channels {
+                let w_base = weights.add(oc * w_stride_oc);
+                let out_ptr = out_base.add(oc * out_stride_ch);
 
-        // Handle remaining OCs (scalar loop for now, or just unroll generic)
-        while oc < out_channels {
-            let w_base = weights.add(oc * w_stride_oc);
-            let out_ptr = out_base.add(oc * out_stride_ch);
-            
-             for t in 0..output_len {
-                 let t_in_start = (t * stride) as isize - (padding as isize);
-                 let mut s = 0.0;
-                 
-                 for ic in 0..in_channels {
-                      let in_ptr_base = in_base.add(ic * in_stride_ch);
-                      let w = w_base.add(ic * 3);
-                       for k in 0..3 {
-                         let idx = t_in_start + k;
-                         if idx >= 0 && idx < (input_len as isize) {
-                             s += *in_ptr_base.add(idx as usize) * *w.add(k as usize);
-                         }
-                       }
-                 }
-                 if let Some(b) = bias {
-                     s += *b.add(oc);
-                 }
-                 if relu {
-                     s = s.max(0.0);
-                 }
-                 *out_ptr.add(t) = s;
-             }
-             oc += 1;
+                for t in 0..output_len {
+                    let t_in_start = (t * stride) as isize - (padding as isize);
+                    let mut s = 0.0;
+
+                    for ic in 0..in_channels {
+                        let in_ptr_base = in_base.add(ic * in_stride_ch);
+                        let w = w_base.add(ic * 3);
+                        for k in 0..3 {
+                            let idx = t_in_start + k;
+                            if idx >= 0 && idx < (input_len as isize) {
+                                s += *in_ptr_base.add(idx as usize) * *w.add(k as usize);
+                            }
+                        }
+                    }
+                    if let Some(b) = bias {
+                        s += *b.add(oc);
+                    }
+                    if relu {
+                        s = s.max(0.0);
+                    }
+                    *out_ptr.add(t) = s;
+                }
+                oc += 1;
+            }
         }
     }
-  }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -294,7 +294,7 @@ pub unsafe fn conv1d_dw_x86(
         for b in 0..batch_size {
             let in_base = input.add(b * channels * input_len);
             let out_base = output.add(b * channels * output_len);
-            
+
             for c in 0..channels {
                 let in_ptr = in_base.add(c * input_len);
                 let out_ptr = out_base.add(c * output_len);
@@ -305,17 +305,17 @@ pub unsafe fn conv1d_dw_x86(
                     0.0
                 };
                 let b_vec = _mm256_broadcast_ss(&b_val);
-                
+
                 let mut t = 0;
                 if stride == 1 {
                     while t + 8 <= output_len {
                         let mut sum = b_vec;
                         let t_in_start = (t as isize) - (padding as isize);
-                        
+
                         for k in 0..kernel_size {
                             let w_val = *w_ptr.add(k);
                             let w_vec = _mm256_broadcast_ss(&w_val);
-                            
+
                             let idx = t_in_start + k as isize;
                             // Vector load input[idx..idx+8]
                             if idx >= 0 && (idx as usize + 7) < input_len {
@@ -333,7 +333,7 @@ pub unsafe fn conv1d_dw_x86(
                                 sum = _mm256_fmadd_ps(v_in, w_vec, sum);
                             }
                         }
-                        
+
                         if relu {
                             sum = _mm256_max_ps(sum, zero_v);
                         }
@@ -341,7 +341,7 @@ pub unsafe fn conv1d_dw_x86(
                         t += 8;
                     }
                 }
-                
+
                 while t < output_len {
                     let mut s = b_val;
                     let t_in = (t * stride) as isize - (padding as isize);
@@ -351,7 +351,9 @@ pub unsafe fn conv1d_dw_x86(
                             s += *in_ptr.add(idx as usize) * *w_ptr.add(k);
                         }
                     }
-                    if relu && s < 0.0 { s = 0.0; }
+                    if relu && s < 0.0 {
+                        s = 0.0;
+                    }
                     *out_ptr.add(t) = s;
                     t += 1;
                 }
@@ -370,38 +372,41 @@ pub unsafe fn fuse_bias_relu_x86(
     out_channels: usize,
     output_len: usize,
 ) {
-     unsafe {
+    unsafe {
         let zero = _mm256_setzero_ps();
         for b in 0..batch_size {
             for oc in 0..out_channels {
-                 let start = (b * out_channels + oc) * output_len;
-                 let out_ptr = output.add(start);
-                 
-                 let b_val = if let Some(b_ptr) = bias {
-                     *b_ptr.add(oc)
-                 } else {
-                     0.0
-                 };
-                 let b_vec = _mm256_set1_ps(b_val);
-                 
-                 let mut i = 0;
-                 while i + 8 <= output_len {
-                      let v_out = _mm256_loadu_ps(out_ptr.add(i));
-                      let mut v_res = if bias.is_some() { _mm256_add_ps(v_out, b_vec) } else { v_out };
-                      if relu {
-                          v_res = _mm256_max_ps(v_res, zero);
-                      }
-                      _mm256_storeu_ps(out_ptr.add(i), v_res);
-                      i += 8;
-                 }
-                 
-                 while i < output_len {
-                     let val = *out_ptr.add(i) + if bias.is_some() { b_val } else { 0.0 };
-                     *out_ptr.add(i) = if relu && val < 0.0 { 0.0 } else { val };
-                     i += 1;
-                 }
+                let start = (b * out_channels + oc) * output_len;
+                let out_ptr = output.add(start);
+
+                let b_val = if let Some(b_ptr) = bias {
+                    *b_ptr.add(oc)
+                } else {
+                    0.0
+                };
+                let b_vec = _mm256_set1_ps(b_val);
+
+                let mut i = 0;
+                while i + 8 <= output_len {
+                    let v_out = _mm256_loadu_ps(out_ptr.add(i));
+                    let mut v_res = if bias.is_some() {
+                        _mm256_add_ps(v_out, b_vec)
+                    } else {
+                        v_out
+                    };
+                    if relu {
+                        v_res = _mm256_max_ps(v_res, zero);
+                    }
+                    _mm256_storeu_ps(out_ptr.add(i), v_res);
+                    i += 8;
+                }
+
+                while i < output_len {
+                    let val = *out_ptr.add(i) + if bias.is_some() { b_val } else { 0.0 };
+                    *out_ptr.add(i) = if relu && val < 0.0 { 0.0 } else { val };
+                    i += 1;
+                }
             }
         }
     }
 }
-

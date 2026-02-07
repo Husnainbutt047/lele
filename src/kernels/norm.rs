@@ -75,7 +75,7 @@ pub fn layer_norm<'b, 'a>(
         let src = &input.data;
         let gamma = &scale.data;
         let beta = &bias.data;
-        
+
         for i in 0..outer_size {
             let offset = i * norm_size;
             let chunk = &src[offset..offset + norm_size];

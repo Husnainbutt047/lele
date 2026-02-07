@@ -36,11 +36,7 @@ pub(crate) fn handle_control_flow_ops(
                 .unwrap();
             let cond = &inputs[0];
             let out_vars = outputs.join(", ");
-            let cond_is_i64 = ctx
-                .var_types
-                .get(cond)
-                .map(|t| t == "i64")
-                .unwrap_or(false);
+            let cond_is_i64 = ctx.var_types.get(cond).map(|t| t == "i64").unwrap_or(false);
             if cond_is_i64 {
                 writeln!(
                     w,

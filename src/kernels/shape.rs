@@ -63,7 +63,10 @@ pub fn shape<T: Clone + std::fmt::Debug>(input: &TensorView<T>) -> TensorView<'s
     let rank = input.dim();
     TensorView::from_owned(shape_data, vec![rank])
 }
-pub fn flatten<'a, T: Clone + std::fmt::Debug>(input: &TensorView<'a, T>, axis: i64) -> TensorView<'a, T> {
+pub fn flatten<'a, T: Clone + std::fmt::Debug>(
+    input: &TensorView<'a, T>,
+    axis: i64,
+) -> TensorView<'a, T> {
     let axis = if axis < 0 {
         input.dim() as i64 + axis
     } else {
@@ -91,7 +94,10 @@ where
     out.resize(size, value);
     TensorView::from_slice(out, shape)
 }
-pub fn unsqueeze<'a, T: Clone + std::fmt::Debug>(input: &TensorView<'a, T>, axes: &[i64]) -> TensorView<'a, T> {
+pub fn unsqueeze<'a, T: Clone + std::fmt::Debug>(
+    input: &TensorView<'a, T>,
+    axes: &[i64],
+) -> TensorView<'a, T> {
     let mut new_shape = input.shape.to_vec();
     let rank = input.dim() + axes.len();
     let mut sorted_axes = axes.to_vec();
@@ -109,7 +115,10 @@ pub fn unsqueeze<'a, T: Clone + std::fmt::Debug>(input: &TensorView<'a, T>, axes
         shape: std::borrow::Cow::Owned(new_shape),
     }
 }
-pub fn squeeze<'a, T: Clone + std::fmt::Debug>(input: &TensorView<'a, T>, axes: Option<&[i64]>) -> TensorView<'a, T> {
+pub fn squeeze<'a, T: Clone + std::fmt::Debug>(
+    input: &TensorView<'a, T>,
+    axes: Option<&[i64]>,
+) -> TensorView<'a, T> {
     let mut new_shape = Vec::new();
     if let Some(axes) = axes {
         let dims = input.dim();

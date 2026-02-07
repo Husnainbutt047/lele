@@ -392,7 +392,11 @@ pub fn get_default_patterns() -> Vec<Pattern> {
                         };
                         (true, v as f32, v)
                     } else {
-                        let v = if !t.float_data.is_empty() { t.float_data[0] } else { 0.0 };
+                        let v = if !t.float_data.is_empty() {
+                            t.float_data[0]
+                        } else {
+                            0.0
+                        };
                         (false, v, v as i64)
                     }
                 } else {

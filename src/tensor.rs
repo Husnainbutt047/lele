@@ -73,14 +73,16 @@ where
     /// # Safety
     /// This function is unsafe because it bypasses the lifetime system to create a new `TensorView`
     /// that might outlive the data it points to.
-    pub unsafe fn detach<'b>(&self) -> TensorView<'b, T> { unsafe {
-        let slice = std::slice::from_raw_parts(self.data.as_ptr(), self.data.len());
-        let shape_slice = std::slice::from_raw_parts(self.shape.as_ptr(), self.shape.len());
-        TensorView {
-            data: Cow::Borrowed(slice),
-            shape: Cow::Borrowed(shape_slice),
+    pub unsafe fn detach<'b>(&self) -> TensorView<'b, T> {
+        unsafe {
+            let slice = std::slice::from_raw_parts(self.data.as_ptr(), self.data.len());
+            let shape_slice = std::slice::from_raw_parts(self.shape.as_ptr(), self.shape.len());
+            TensorView {
+                data: Cow::Borrowed(slice),
+                shape: Cow::Borrowed(shape_slice),
+            }
         }
-    }}
+    }
 }
 
 impl<'a> TensorView<'a, f32> {
