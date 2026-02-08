@@ -445,6 +445,72 @@ pub fn transpose<'b, 'a, T: Clone + Copy + std::fmt::Debug>(
     unsafe {
         out.set_len(out_numel);
     }
+
+    // Fast path: perm [0,2,1,3] for 4D tensors — copy contiguous blocks
+    // [B, A, C, D] -> [B, C, A, D] — inner dim D is contiguous
+    if ndim == 4 && perm == [0, 2, 1, 3] {
+        let (b, a, c, d) = (input.shape[0], input.shape[1], input.shape[2], input.shape[3]);
+        let out_slice = out.as_mut_slice();
+        for bi in 0..b {
+            for ci in 0..c {
+                for ai in 0..a {
+                    let src_off = ((bi * a + ai) * c + ci) * d;
+                    let dst_off = ((bi * c + ci) * a + ai) * d;
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            input.data.as_ptr().add(src_off),
+                            out_slice.as_mut_ptr().add(dst_off),
+                            d,
+                        );
+                    }
+                }
+            }
+        }
+        return TensorView::from_slice(out, out_shape);
+    }
+
+    // Fast path: perm [0,2,3,1] for 4D tensors
+    // [B, A, C, D] -> [B, C, D, A]
+    if ndim == 4 && perm == [0, 2, 3, 1] {
+        let (b, a, c, d) = (input.shape[0], input.shape[1], input.shape[2], input.shape[3]);
+        let out_slice = out.as_mut_slice();
+        for bi in 0..b {
+            for ai in 0..a {
+                for ci in 0..c {
+                    for di in 0..d {
+                        let src_off = ((bi * a + ai) * c + ci) * d + di;
+                        let dst_off = ((bi * c + ci) * d + di) * a + ai;
+                        unsafe {
+                            *out_slice.get_unchecked_mut(dst_off) = *input.data.get_unchecked(src_off);
+                        }
+                    }
+                }
+            }
+        }
+        return TensorView::from_slice(out, out_shape);
+    }
+
+    // Fast path: perm [0,2,1] for 3D tensors — 2D transpose within each batch
+    // [B, R, C] -> [B, C, R]
+    if ndim == 3 && perm == [0, 2, 1] {
+        let (b, r, c) = (input.shape[0], input.shape[1], input.shape[2]);
+        let out_slice = out.as_mut_slice();
+        for bi in 0..b {
+            let base_in = bi * r * c;
+            let base_out = bi * c * r;
+            for ri in 0..r {
+                for ci in 0..c {
+                    unsafe {
+                        *out_slice.get_unchecked_mut(base_out + ci * r + ri) =
+                            *input.data.get_unchecked(base_in + ri * c + ci);
+                    }
+                }
+            }
+        }
+        return TensorView::from_slice(out, out_shape);
+    }
+
+    // Generic fallback
     let in_strides = utils::compute_strides(&input.shape);
     let mut virtual_strides = vec![0; ndim];
     for i in 0..ndim {

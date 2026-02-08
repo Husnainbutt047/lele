@@ -362,6 +362,123 @@ pub unsafe fn conv1d_dw_x86(
     }
 }
 
+/// AVX2-optimized Conv1d for single input channel with any kernel size/stride.
+/// Avoids im2col + matmul overhead by computing dot products directly.
+/// Processes 4 output channels at a time, using FMA for the kernel dot product.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+pub unsafe fn conv1d_single_channel_x86(
+    batch_size: usize,
+    input_len: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    stride: usize,
+    output_len: usize,
+    relu: bool,
+    bias: Option<*const f32>,
+    input: *const f32,
+    weights: *const f32, // [out_channels, 1, kernel_size] row-major
+    output: *mut f32,
+) {
+    unsafe {
+        for b in 0..batch_size {
+            let in_base = input.add(b * input_len);
+            let out_base = output.add(b * out_channels * output_len);
+
+            let mut oc = 0;
+            // Process 4 output channels at a time
+            while oc + 4 <= out_channels {
+                let w0 = weights.add(oc * kernel_size);
+                let w1 = weights.add((oc + 1) * kernel_size);
+                let w2 = weights.add((oc + 2) * kernel_size);
+                let w3 = weights.add((oc + 3) * kernel_size);
+
+                for t in 0..output_len {
+                    let in_ptr = in_base.add(t * stride);
+                    let mut acc0 = _mm256_setzero_ps();
+                    let mut acc1 = _mm256_setzero_ps();
+                    let mut acc2 = _mm256_setzero_ps();
+                    let mut acc3 = _mm256_setzero_ps();
+
+                    let mut k = 0;
+                    while k + 8 <= kernel_size {
+                        let v_in = _mm256_loadu_ps(in_ptr.add(k));
+                        acc0 = _mm256_fmadd_ps(v_in, _mm256_loadu_ps(w0.add(k)), acc0);
+                        acc1 = _mm256_fmadd_ps(v_in, _mm256_loadu_ps(w1.add(k)), acc1);
+                        acc2 = _mm256_fmadd_ps(v_in, _mm256_loadu_ps(w2.add(k)), acc2);
+                        acc3 = _mm256_fmadd_ps(v_in, _mm256_loadu_ps(w3.add(k)), acc3);
+                        k += 8;
+                    }
+
+                    // Horizontal sums
+                    let mut s0 = super::math::hsum_ps(acc0);
+                    let mut s1 = super::math::hsum_ps(acc1);
+                    let mut s2 = super::math::hsum_ps(acc2);
+                    let mut s3 = super::math::hsum_ps(acc3);
+
+                    // Scalar tail for kernel_size not divisible by 8
+                    while k < kernel_size {
+                        let v = *in_ptr.add(k);
+                        s0 += v * *w0.add(k);
+                        s1 += v * *w1.add(k);
+                        s2 += v * *w2.add(k);
+                        s3 += v * *w3.add(k);
+                        k += 1;
+                    }
+
+                    if let Some(b_ptr) = bias {
+                        s0 += *b_ptr.add(oc);
+                        s1 += *b_ptr.add(oc + 1);
+                        s2 += *b_ptr.add(oc + 2);
+                        s3 += *b_ptr.add(oc + 3);
+                    }
+
+                    if relu {
+                        s0 = s0.max(0.0);
+                        s1 = s1.max(0.0);
+                        s2 = s2.max(0.0);
+                        s3 = s3.max(0.0);
+                    }
+
+                    *out_base.add(oc * output_len + t) = s0;
+                    *out_base.add((oc + 1) * output_len + t) = s1;
+                    *out_base.add((oc + 2) * output_len + t) = s2;
+                    *out_base.add((oc + 3) * output_len + t) = s3;
+                }
+                oc += 4;
+            }
+
+            // Handle remaining output channels (< 4)
+            while oc < out_channels {
+                let w_ptr = weights.add(oc * kernel_size);
+                for t in 0..output_len {
+                    let in_ptr = in_base.add(t * stride);
+                    let mut acc = _mm256_setzero_ps();
+                    let mut k = 0;
+                    while k + 8 <= kernel_size {
+                        let v_in = _mm256_loadu_ps(in_ptr.add(k));
+                        acc = _mm256_fmadd_ps(v_in, _mm256_loadu_ps(w_ptr.add(k)), acc);
+                        k += 8;
+                    }
+                    let mut s = super::math::hsum_ps(acc);
+                    while k < kernel_size {
+                        s += *in_ptr.add(k) * *w_ptr.add(k);
+                        k += 1;
+                    }
+                    if let Some(b_ptr) = bias {
+                        s += *b_ptr.add(oc);
+                    }
+                    if relu {
+                        s = s.max(0.0);
+                    }
+                    *out_base.add(oc * output_len + t) = s;
+                }
+                oc += 1;
+            }
+        }
+    }
+}
+
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2", enable = "fma")]
 pub unsafe fn fuse_bias_relu_x86(

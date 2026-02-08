@@ -892,58 +892,69 @@ pub fn conv1d_fused<'b, 'a>(
     let out_channels_per_group = out_channels / group as usize;
     let unfolded_rows = in_channels_per_group * kernel_size;
 
-    // Optimization for Single-Channel Convolutions (e.g. STFT: 1->1, K=256)
+    // Optimization for Single-Channel Input Convolutions (e.g. STFT: 1->258, K=256)
     // Avoids im2col for large kernels by doing direct dot products.
-    #[cfg(target_arch = "aarch64")]
-    if in_channels == 1
-        && out_channels == 1
-        && group == 1
-        && pad_left == 0
-        && pad_right == 0
-        && dilation == 1
-    {
-        unsafe {
-            let in_ptr_base = input.data.as_ptr();
-            let w_ptr = weights.data.as_ptr();
-            let out_ptr_base = out.as_mut_ptr();
-
-            for b in 0..batch_size {
-                let in_ptr = in_ptr_base.add(b * input_len);
-                let out_ptr = out_ptr_base.add(b * output_len);
-
-                // For each output time step
-                for t in 0..output_len {
-                    let t_in = t * stride;
-                    // Dot product of inputs[t_in..t_in+K] and weights[0..K]
-                    let mut sum = 0.0;
-                    let mut k = 0;
-                    let mut v_sum = vdupq_n_f32(0.0);
-
-                    // Vectorized Dot Product
-                    while k + 4 <= kernel_size {
-                        let v_i = vld1q_f32(in_ptr.add(t_in + k));
-                        let v_w = vld1q_f32(w_ptr.add(k));
-                        v_sum = vfmaq_f32(v_sum, v_i, v_w);
-                        k += 4;
-                    }
-                    sum += vaddvq_f32(v_sum);
-
-                    // Tail
-                    while k < kernel_size {
-                        sum += *in_ptr.add(t_in + k) * *w_ptr.add(k);
-                        k += 1;
-                    }
-
-                    // Bias
-                    if let Some(b_vec) = bias {
-                        sum += b_vec.data[0];
-                    }
-                    // No ReLU support here yet (STFT doesn't use it)
-                    *out_ptr.add(t) = sum;
-                }
+    // Works on all platforms with arch-specific SIMD acceleration.
+    if in_channels == 1 && group == 1 && pad_left == 0 && pad_right == 0 && dilation == 1 {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let bias_ptr = bias.map(|b| b.data.as_ptr());
+            unsafe {
+                crate::kernels::avx::conv1d::conv1d_single_channel_x86(
+                    batch_size,
+                    input_len,
+                    out_channels,
+                    kernel_size,
+                    stride,
+                    output_len,
+                    relu,
+                    bias_ptr,
+                    input.data.as_ptr(),
+                    weights.data.as_ptr(),
+                    out.as_mut_ptr(),
+                );
             }
+            return TensorView::from_slice(out, vec![batch_size, out_channels, output_len]);
         }
-        return TensorView::from_slice(out, vec![batch_size, out_channels, output_len]);
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            unsafe {
+                conv1d_single_channel_neon(
+                    batch_size,
+                    input_len,
+                    out_channels,
+                    kernel_size,
+                    stride,
+                    output_len,
+                    relu,
+                    bias,
+                    input.data.as_ptr(),
+                    weights.data.as_ptr(),
+                    out.as_mut_ptr(),
+                );
+            }
+            return TensorView::from_slice(out, vec![batch_size, out_channels, output_len]);
+        }
+
+        // Generic scalar fallback for other architectures
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        {
+            conv1d_single_channel_scalar(
+                batch_size,
+                input_len,
+                out_channels,
+                kernel_size,
+                stride,
+                output_len,
+                relu,
+                bias,
+                input.data.as_ptr(),
+                weights.data.as_ptr(),
+                out.as_mut_ptr(),
+            );
+            return TensorView::from_slice(out, vec![batch_size, out_channels, output_len]);
+        }
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -979,8 +990,9 @@ pub fn conv1d_fused<'b, 'a>(
     if group as usize == in_channels
         && group as usize == out_channels
         && (stride == 1 || stride == 2)
+        && dilation == 1
     {
-        // Depthwise Convolution
+        // Depthwise Convolution (dilation must be 1 for this fast path)
         let bias_ptr = bias.map(|b| b.data.as_ptr());
         unsafe {
             crate::kernels::avx::conv1d::conv1d_dw_x86(
@@ -1271,6 +1283,158 @@ pub fn conv1d_fused<'b, 'a>(
         TensorView::from_slice(out, vec![batch_size, out_channels, output_len])
     })
 }
+
+/// Neon-optimized Conv1d for single input channel with any kernel size/stride/out_channels.
+/// Processes 4 output channels at a time using NEON FMA for the kernel dot product.
+#[cfg(target_arch = "aarch64")]
+unsafe fn conv1d_single_channel_neon(
+    batch_size: usize,
+    input_len: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    stride: usize,
+    output_len: usize,
+    relu: bool,
+    bias: Option<&TensorView>,
+    input: *const f32,
+    weights: *const f32,
+    output: *mut f32,
+) {
+    unsafe {
+        for b in 0..batch_size {
+            let in_base = input.add(b * input_len);
+            let out_base = output.add(b * out_channels * output_len);
+
+            let mut oc = 0;
+            while oc + 4 <= out_channels {
+                let w0 = weights.add(oc * kernel_size);
+                let w1 = weights.add((oc + 1) * kernel_size);
+                let w2 = weights.add((oc + 2) * kernel_size);
+                let w3 = weights.add((oc + 3) * kernel_size);
+
+                for t in 0..output_len {
+                    let in_ptr = in_base.add(t * stride);
+                    let mut acc0 = vdupq_n_f32(0.0);
+                    let mut acc1 = vdupq_n_f32(0.0);
+                    let mut acc2 = vdupq_n_f32(0.0);
+                    let mut acc3 = vdupq_n_f32(0.0);
+
+                    let mut k = 0;
+                    while k + 4 <= kernel_size {
+                        let v_in = vld1q_f32(in_ptr.add(k));
+                        acc0 = vfmaq_f32(acc0, v_in, vld1q_f32(w0.add(k)));
+                        acc1 = vfmaq_f32(acc1, v_in, vld1q_f32(w1.add(k)));
+                        acc2 = vfmaq_f32(acc2, v_in, vld1q_f32(w2.add(k)));
+                        acc3 = vfmaq_f32(acc3, v_in, vld1q_f32(w3.add(k)));
+                        k += 4;
+                    }
+
+                    let mut s0 = vaddvq_f32(acc0);
+                    let mut s1 = vaddvq_f32(acc1);
+                    let mut s2 = vaddvq_f32(acc2);
+                    let mut s3 = vaddvq_f32(acc3);
+
+                    while k < kernel_size {
+                        let v = *in_ptr.add(k);
+                        s0 += v * *w0.add(k);
+                        s1 += v * *w1.add(k);
+                        s2 += v * *w2.add(k);
+                        s3 += v * *w3.add(k);
+                        k += 1;
+                    }
+
+                    if let Some(b_vec) = bias {
+                        s0 += b_vec.data[oc];
+                        s1 += b_vec.data[oc + 1];
+                        s2 += b_vec.data[oc + 2];
+                        s3 += b_vec.data[oc + 3];
+                    }
+
+                    if relu {
+                        s0 = s0.max(0.0);
+                        s1 = s1.max(0.0);
+                        s2 = s2.max(0.0);
+                        s3 = s3.max(0.0);
+                    }
+
+                    *out_base.add(oc * output_len + t) = s0;
+                    *out_base.add((oc + 1) * output_len + t) = s1;
+                    *out_base.add((oc + 2) * output_len + t) = s2;
+                    *out_base.add((oc + 3) * output_len + t) = s3;
+                }
+                oc += 4;
+            }
+
+            while oc < out_channels {
+                let w_ptr = weights.add(oc * kernel_size);
+                for t in 0..output_len {
+                    let in_ptr = in_base.add(t * stride);
+                    let mut acc = vdupq_n_f32(0.0);
+                    let mut k = 0;
+                    while k + 4 <= kernel_size {
+                        acc = vfmaq_f32(acc, vld1q_f32(in_ptr.add(k)), vld1q_f32(w_ptr.add(k)));
+                        k += 4;
+                    }
+                    let mut s = vaddvq_f32(acc);
+                    while k < kernel_size {
+                        s += *in_ptr.add(k) * *w_ptr.add(k);
+                        k += 1;
+                    }
+                    if let Some(b_vec) = bias {
+                        s += b_vec.data[oc];
+                    }
+                    if relu {
+                        s = s.max(0.0);
+                    }
+                    *out_base.add(oc * output_len + t) = s;
+                }
+                oc += 1;
+            }
+        }
+    }
+}
+
+/// Generic scalar Conv1d for single input channel with any kernel size/stride/out_channels.
+/// Used as fallback on architectures without SIMD specialization.
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn conv1d_single_channel_scalar(
+    batch_size: usize,
+    input_len: usize,
+    out_channels: usize,
+    kernel_size: usize,
+    stride: usize,
+    output_len: usize,
+    relu: bool,
+    bias: Option<&TensorView>,
+    input: *const f32,
+    weights: *const f32,
+    output: *mut f32,
+) {
+    unsafe {
+        for b in 0..batch_size {
+            let in_base = input.add(b * input_len);
+            let out_base = output.add(b * out_channels * output_len);
+            for oc in 0..out_channels {
+                let w_ptr = weights.add(oc * kernel_size);
+                for t in 0..output_len {
+                    let in_ptr = in_base.add(t * stride);
+                    let mut s = 0.0f32;
+                    for k in 0..kernel_size {
+                        s += *in_ptr.add(k) * *w_ptr.add(k);
+                    }
+                    if let Some(b_vec) = bias {
+                        s += b_vec.data[oc];
+                    }
+                    if relu {
+                        s = s.max(0.0);
+                    }
+                    *out_base.add(oc * output_len + t) = s;
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

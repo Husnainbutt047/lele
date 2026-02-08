@@ -164,7 +164,8 @@ pub fn generate_model_code(
 
     let compiler = Compiler::new()
         .with_name(class_name)
-        .with_default_optimizations();
+        .with_default_optimizations()
+        .with_constant_folding(true);
 
     let result = compiler.compile(graph)?;
 

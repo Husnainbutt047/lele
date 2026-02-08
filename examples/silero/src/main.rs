@@ -91,26 +91,34 @@ fn main() {
 
     let start_total = Instant::now();
     let mut all_outputs = Vec::with_capacity(num_chunks);
+    let mut ws = silerovad::SileroVadWorkspace::new();
 
-    for i in 0..num_chunks {
+    // Warmup run
+    {
+        let input_data: Vec<f32> = padded_audio[..chunk_size].iter().map(|&x| x * 32768.0).collect();
+        let input = TensorView::from_owned(input_data, vec![1, chunk_size]);
+        let state = TensorView::from_owned(state_data.clone(), vec![2, 1, 128]);
+        let sr = TensorView::from_slice(&sr_data, vec![1]);
+        let (output, new_state) = model.forward_with_workspace(&mut ws, input, state, sr);
+        if let Some(&prob) = output.data.get(0) {
+            all_outputs.push(prob);
+        }
+        state_data = new_state.data.to_vec();
+    }
+
+    let start_infer = Instant::now();
+    for i in 1..num_chunks {
         let chunk_start = i * chunk_size;
         let chunk_end = chunk_start + chunk_size;
         let chunk_data = &padded_audio[chunk_start..chunk_end];
 
-        // Silero VAD Input Mapping:
-        // Input: [1, 512]
-        // State: [2, 1, 128]
-        // SR: [1]
-
-        // Note: Silero VAD v5 usually expects [-1, 1], but some exported models
-        // perform better with raw PCM values or have specific scaling requirements.
         let input_data: Vec<f32> = chunk_data.iter().map(|&x| x * 32768.0).collect();
         let input = TensorView::from_owned(input_data, vec![1, chunk_size]);
-        let state = TensorView::from_slice(&state_data, vec![2, 1, 128]);
+        let state = TensorView::from_owned(state_data.clone(), vec![2, 1, 128]);
         let sr = TensorView::from_slice(&sr_data, vec![1]);
 
         // Forward
-        let (output, new_state) = model.forward(input, state, sr);
+        let (output, new_state) = model.forward_with_workspace(&mut ws, input, state, sr);
 
         // Output is [1, 1] probability
         if let Some(&prob) = output.data.get(0) {
@@ -120,16 +128,21 @@ fn main() {
         // Update state
         state_data = new_state.data.to_vec();
     }
+    let infer_elapsed = start_infer.elapsed();
 
     let total_elapsed = start_total.elapsed();
+    let avg_chunk_us = infer_elapsed.as_micros() as f64 / (num_chunks - 1) as f64;
     let audio_duration = padded_len as f64 / sample_rate as f64;
     let rtf = total_elapsed.as_secs_f64() / audio_duration;
 
     println!("✓ Inference completed.");
     println!(
-        "✓ Total Time: {:.2}ms",
-        total_elapsed.as_secs_f64() * 1000.0
+        "✓ Total Time: {:.2}ms (steady-state {:.2}ms for {} chunks)",
+        total_elapsed.as_secs_f64() * 1000.0,
+        infer_elapsed.as_secs_f64() * 1000.0,
+        num_chunks - 1,
     );
+    println!("✓ Avg per chunk: {:.2}µs ({:.4}ms)", avg_chunk_us, avg_chunk_us / 1000.0);
     println!("✓ RTF: {:.4} (Audio: {:.2}s)", rtf, audio_duration);
 
     let max_prob = all_outputs.iter().cloned().fold(0.0f32, f32::max);

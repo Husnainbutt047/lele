@@ -4,7 +4,7 @@ import time
 import sys
 
 def main():
-    model_path = 'examples/silero/silero.onnx'
+    model_path = 'examples/silero/model.onnx'
     # Use CPU provider
     sess_options = ort.SessionOptions()
     sess_options.intra_op_num_threads = 1

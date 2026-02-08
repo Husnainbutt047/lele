@@ -67,6 +67,192 @@ pub fn mat_mul_integer_with_scale_bias_relu<'a, 'b, 'c>(
     )
 }
 
+/// Optimized version that takes raw u8 weight data directly, avoiding f32->u8 conversion.
+/// `a` is quantized input (f32 values 0-255), `b_u8_data`/`b_shape` is the raw u8 weight.
+pub fn mat_mul_integer_u8_weights<'a, 'b>(
+    a: &TensorView<'b, f32>,
+    b_u8_data: &[u8],
+    b_shape: &[usize],
+    a_zero_point: Option<f32>,
+    b_zero_point: Option<u8>,
+    scale: Option<&TensorView<'b, f32>>,
+    bias: Option<&TensorView<'b, f32>>,
+    apply_relu: bool,
+    out: &'a mut Vec<f32>,
+) -> TensorView<'a, f32> {
+    // Convert only A from f32->u8 (small: M×K, typically 93×512)
+    let a_u8: Vec<u8> = a.data.iter().map(|&x| x as u8).collect();
+    let a_u8_view = TensorView::from_slice(&a_u8, a.shape.to_vec());
+    let b_u8_view = TensorView::from_slice(b_u8_data, b_shape.to_vec());
+
+    let a_zp_u8 = a_zero_point.map(|z| TensorView::from_owned(vec![z as u8], vec![1]));
+    let b_zp_u8 = b_zero_point.map(|z| TensorView::from_owned(vec![z], vec![1]));
+
+    mat_mul_integer_u8(
+        &a_u8_view,
+        &b_u8_view,
+        a_zp_u8.as_ref(),
+        b_zp_u8.as_ref(),
+        scale,
+        bias,
+        apply_relu,
+        out,
+    )
+}
+
+/// Pre-processed weight data for fast quantized GEMM.
+/// Stores the transposed+XOR'd weight matrix and column sums.
+pub struct PreparedWeights {
+    /// B transposed [N, K_padded] with XOR 0x80 applied (i8 reinterpretation)
+    pub b_t: Vec<u8>,
+    /// Column sums of original B u8 values (for zero-point correction)
+    pub col_sums_b_u8: Vec<i32>,
+    /// Original K dimension
+    pub k: usize,
+    /// K padded to multiple of 16
+    pub k_padded: usize,
+    /// N dimension (number of output columns)
+    pub n: usize,
+}
+
+/// Pre-process weight matrix B [K, N] for fast quantized GEMM.
+/// Transposes to [N, K_padded] and XORs with 0x80 for VPMADDWD compatibility.
+pub fn prepare_weights(b_data: &[u8], k: usize, n: usize) -> PreparedWeights {
+    let k_padded = (k + 15) & !15;
+    let mut b_t = vec![0u8; n * k_padded];
+    let mut col_sums_b_u8 = vec![0i32; n];
+
+    for jj in 0..n {
+        let mut csum: i32 = 0;
+        for kk in 0..k {
+            let b_val = b_data[kk * n + jj];
+            b_t[jj * k_padded + kk] = b_val ^ 0x80;
+            csum += b_val as i32;
+        }
+        col_sums_b_u8[jj] = csum;
+    }
+
+    PreparedWeights {
+        b_t,
+        col_sums_b_u8,
+        k,
+        k_padded,
+        n,
+    }
+}
+
+/// Fast GEMM with pre-processed weights. Avoids per-call transpose.
+/// Uses multi-threaded row parallelism for large M dimensions.
+/// `a` is f32 quantized input (values 0-255), `pw` is pre-processed weight data.
+pub fn mat_mul_integer_prepared<'a, 'b>(
+    a: &TensorView<'b, f32>,
+    pw: &PreparedWeights,
+    a_zero_point: Option<f32>,
+    b_zero_point: Option<u8>,
+    scale: Option<&TensorView<'b, f32>>,
+    bias: Option<&TensorView<'b, f32>>,
+    apply_relu: bool,
+    out: &'a mut Vec<f32>,
+) -> TensorView<'a, f32> {
+    // Convert A from f32 to u8
+    let len = a.data.len();
+    let mut a_u8: Vec<u8> = Vec::with_capacity(len);
+    unsafe {
+        a_u8.set_len(len);
+        let src = a.data.as_ptr();
+        let dst = a_u8.as_mut_ptr();
+        for i in 0..len {
+            *dst.add(i) = *src.add(i) as u8;
+        }
+    }
+
+    let a_dims = a.shape.len();
+    let m = a.shape[a_dims - 2];
+    let batch: usize = a.shape[..a_dims - 2].iter().product();
+    let batch_shape = &a.shape[..a_dims - 2];
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        let total_batch = batch.max(1);
+        let output_len = total_batch * m * pw.n;
+        crate::kernels::utils::ensure_capacity(out, output_len);
+        out.resize(output_len, 0.0);
+
+        let zp_a = a_zero_point.unwrap_or(0.0) as i32;
+        let zp_b = b_zero_point.unwrap_or(0) as i32;
+        let k = pw.k;
+        let n = pw.n;
+        let k_padded = pw.k_padded;
+        let k_zp_b = k as i32 * zp_b;
+        let corr_128_minus_zpb = 128 - zp_b;
+        let k_aligned = k == k_padded;
+        let stride_a = m * k;
+        let stride_out = m * n;
+
+        // Extract scale/bias data for gemm_row_avx2
+        let scale_data_ptr = scale.map(|s| s.data.as_ptr());
+        let scale_len = scale.map(|s| s.data.len()).unwrap_or(0);
+        let bias_data_ptr = bias.map(|b| b.data.as_ptr());
+
+        for b_i in 0..total_batch {
+            let a_batch = &a_u8[b_i * stride_a..(b_i + 1) * stride_a];
+            let out_batch = &mut out[b_i * stride_out..(b_i + 1) * stride_out];
+
+            for i in 0..m {
+                unsafe {
+                    crate::kernels::avx::quantization::gemm_row_avx2(
+                        &a_batch[i * k..i * k + k],
+                        pw.b_t.as_ptr(),
+                        k,
+                        n,
+                        k_padded,
+                        k_aligned,
+                        pw.col_sums_b_u8.as_ptr(),
+                        zp_a,
+                        zp_b,
+                        k_zp_b,
+                        corr_128_minus_zpb,
+                        scale_data_ptr,
+                        scale_len,
+                        bias_data_ptr,
+                        apply_relu,
+                        &mut out_batch[i * n..(i + 1) * n],
+                    );
+                }
+            }
+        }
+
+        let mut output_shape = batch_shape.to_vec();
+        output_shape.push(m);
+        output_shape.push(n);
+        TensorView::from_slice(out, output_shape)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // Fallback: reconstruct original B layout and use existing path
+        let a_u8_view = TensorView::from_slice(&a_u8, a.shape.to_vec());
+        let mut b_u8 = vec![0u8; pw.k * pw.n];
+        for jj in 0..pw.n {
+            for kk in 0..pw.k {
+                b_u8[kk * pw.n + jj] = pw.b_t[jj * pw.k_padded + kk] ^ 0x80;
+            }
+        }
+        let b_view = TensorView::from_slice(&b_u8, vec![pw.k, pw.n]);
+        let a_zp = a_zero_point.map(|z| TensorView::from_owned(vec![z as u8], vec![1]));
+        let b_zp = b_zero_point.map(|z| TensorView::from_owned(vec![z], vec![1]));
+        mat_mul_integer_u8(
+            &a_u8_view,
+            &b_view,
+            a_zp.as_ref(),
+            b_zp.as_ref(),
+            scale,
+            bias,
+            apply_relu,
+            out,
+        )
+    }
+}
+
 // Internal function with activation parameter
 fn mat_mul_integer_with_scale_bias_activation<'a, 'b, 'c>(
     a: &TensorView<'b, f32>,
@@ -130,7 +316,22 @@ fn mat_mul_integer_u8<'a, 'b, 'c>(
             out,
         )
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
+    {
+        unsafe {
+            crate::kernels::avx::quantization::mat_mul_integer_u8_avx2(
+                a,
+                b,
+                a_zero_point,
+                b_zero_point,
+                scale,
+                bias,
+                apply_relu,
+                out,
+            )
+        }
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
         use crate::kernels::utils;
         let zp_a_ref: &[u8] = a_zero_point.map(|z| z.data.as_ref()).unwrap_or(&[]);
@@ -254,7 +455,18 @@ pub fn dynamic_quantize_linear<'a, 'b>(
             out_zp,
         )
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
+    {
+        unsafe {
+            crate::kernels::avx::quantization::dynamic_quantize_linear_avx2(
+                x,
+                out_y_storage,
+                out_scale,
+                out_zp,
+            )
+        }
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
         let len = x.data.len();
 

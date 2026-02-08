@@ -5,9 +5,6 @@ use faer::mat::{MatMut, MatRef};
 use faer::{Accum, Par};
 use std::borrow::Cow;
 
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
-
 pub fn matmul<'a>(
     a: &TensorView<'_>,
     b: &TensorView<'_>,

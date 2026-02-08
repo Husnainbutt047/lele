@@ -264,6 +264,41 @@ pub fn add<'b, 'a, T: Clone + Copy + std::ops::Add<Output = T> + std::fmt::Debug
     }
     broadcast_binary_op(a, b, out, |x, y| x + y)
 }
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(dead_code)]
+unsafe fn add_f32_avx2(a: *const f32, b: *const f32, out: *mut f32, len: usize) {
+    use std::arch::x86_64::*;
+    unsafe {
+        let mut i = 0;
+        while i + 32 <= len {
+            let va0 = _mm256_loadu_ps(a.add(i));
+            let vb0 = _mm256_loadu_ps(b.add(i));
+            let va1 = _mm256_loadu_ps(a.add(i + 8));
+            let vb1 = _mm256_loadu_ps(b.add(i + 8));
+            let va2 = _mm256_loadu_ps(a.add(i + 16));
+            let vb2 = _mm256_loadu_ps(b.add(i + 16));
+            let va3 = _mm256_loadu_ps(a.add(i + 24));
+            let vb3 = _mm256_loadu_ps(b.add(i + 24));
+            _mm256_storeu_ps(out.add(i), _mm256_add_ps(va0, vb0));
+            _mm256_storeu_ps(out.add(i + 8), _mm256_add_ps(va1, vb1));
+            _mm256_storeu_ps(out.add(i + 16), _mm256_add_ps(va2, vb2));
+            _mm256_storeu_ps(out.add(i + 24), _mm256_add_ps(va3, vb3));
+            i += 32;
+        }
+        while i + 8 <= len {
+            let va = _mm256_loadu_ps(a.add(i));
+            let vb = _mm256_loadu_ps(b.add(i));
+            _mm256_storeu_ps(out.add(i), _mm256_add_ps(va, vb));
+            i += 8;
+        }
+        while i < len {
+            *out.add(i) = *a.add(i) + *b.add(i);
+            i += 1;
+        }
+    }
+}
 pub fn mul<'b, 'a, T: Clone + Copy + std::ops::Mul<Output = T> + std::fmt::Debug>(
     a: &TensorView<'b, T>,
     b: &TensorView<'b, T>,
@@ -287,6 +322,41 @@ pub fn mul<'b, 'a, T: Clone + Copy + std::ops::Mul<Output = T> + std::fmt::Debug
         };
     }
     broadcast_binary_op(a, b, out, |x, y| x * y)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(dead_code)]
+unsafe fn mul_f32_avx2(a: *const f32, b: *const f32, out: *mut f32, len: usize) {
+    use std::arch::x86_64::*;
+    unsafe {
+        let mut i = 0;
+        while i + 32 <= len {
+            let va0 = _mm256_loadu_ps(a.add(i));
+            let vb0 = _mm256_loadu_ps(b.add(i));
+            let va1 = _mm256_loadu_ps(a.add(i + 8));
+            let vb1 = _mm256_loadu_ps(b.add(i + 8));
+            let va2 = _mm256_loadu_ps(a.add(i + 16));
+            let vb2 = _mm256_loadu_ps(b.add(i + 16));
+            let va3 = _mm256_loadu_ps(a.add(i + 24));
+            let vb3 = _mm256_loadu_ps(b.add(i + 24));
+            _mm256_storeu_ps(out.add(i), _mm256_mul_ps(va0, vb0));
+            _mm256_storeu_ps(out.add(i + 8), _mm256_mul_ps(va1, vb1));
+            _mm256_storeu_ps(out.add(i + 16), _mm256_mul_ps(va2, vb2));
+            _mm256_storeu_ps(out.add(i + 24), _mm256_mul_ps(va3, vb3));
+            i += 32;
+        }
+        while i + 8 <= len {
+            let va = _mm256_loadu_ps(a.add(i));
+            let vb = _mm256_loadu_ps(b.add(i));
+            _mm256_storeu_ps(out.add(i), _mm256_mul_ps(va, vb));
+            i += 8;
+        }
+        while i < len {
+            *out.add(i) = *a.add(i) * *b.add(i);
+            i += 1;
+        }
+    }
 }
 pub fn sub<'b, 'a, T: Clone + Copy + std::ops::Sub<Output = T> + std::fmt::Debug>(
     a: &TensorView<'b, T>,
@@ -351,7 +421,19 @@ pub fn tanh_kernel<'b, 'a>(input: &TensorView<'b>, out: &'a mut Vec<f32>) -> Ten
     {
         crate::kernels::neon::math::tanh(input, out)
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
+    {
+        let numel = input.data.len();
+        utils::ensure_capacity(out, numel);
+        unsafe {
+            tanh_avx2(input.data.as_ptr(), out.as_mut_ptr(), numel);
+        }
+        TensorView {
+            data: Cow::Borrowed(out),
+            shape: Cow::Owned(input.shape.to_vec()),
+        }
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
         let numel = input.data.len();
         utils::ensure_capacity(out, numel);
@@ -361,6 +443,24 @@ pub fn tanh_kernel<'b, 'a>(input: &TensorView<'b>, out: &'a mut Vec<f32>) -> Ten
         TensorView {
             data: Cow::Borrowed(out),
             shape: Cow::Owned(input.shape.to_vec()),
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn tanh_avx2(input: *const f32, output: *mut f32, len: usize) {
+    unsafe {
+        let mut i = 0;
+        while i + 8 <= len {
+            let v = std::arch::x86_64::_mm256_loadu_ps(input.add(i));
+            let r = crate::kernels::avx::math::avx2_tanh_ps(v);
+            std::arch::x86_64::_mm256_storeu_ps(output.add(i), r);
+            i += 8;
+        }
+        while i < len {
+            *output.add(i) = (*input.add(i)).tanh();
+            i += 1;
         }
     }
 }
@@ -454,7 +554,21 @@ pub fn sigmoid<'b, 'a>(input: &TensorView<'b>, out: &'a mut Vec<f32>) -> TensorV
     {
         crate::kernels::neon::math::sigmoid(input, out)
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
+    {
+        let len = input.data.len();
+        utils::ensure_capacity(out, len);
+        let i_slice = &input.data;
+        let o_slice = out.as_mut_slice();
+        unsafe {
+            sigmoid_avx2(i_slice.as_ptr(), o_slice.as_mut_ptr(), len);
+        }
+        TensorView {
+            data: Cow::Borrowed(out),
+            shape: std::borrow::Cow::Owned(input.shape.to_vec()),
+        }
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
         let len = input.data.len();
         utils::ensure_capacity(out, len);
@@ -473,12 +587,44 @@ pub fn sigmoid<'b, 'a>(input: &TensorView<'b>, out: &'a mut Vec<f32>) -> TensorV
         }
     }
 }
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn sigmoid_avx2(input: *const f32, output: *mut f32, len: usize) {
+    unsafe {
+        let mut i = 0;
+        while i + 8 <= len {
+            let v = std::arch::x86_64::_mm256_loadu_ps(input.add(i));
+            let r = crate::kernels::avx::math::avx2_sigmoid_ps(v);
+            std::arch::x86_64::_mm256_storeu_ps(output.add(i), r);
+            i += 8;
+        }
+        while i < len {
+            *output.add(i) = crate::kernels::activations::sigmoid(*input.add(i));
+            i += 1;
+        }
+    }
+}
 pub fn relu<'a, 'b>(input: &TensorView<'b>, out: &'a mut Vec<f32>) -> TensorView<'a> {
     #[cfg(target_arch = "aarch64")]
     {
         crate::kernels::neon::math::relu(input, out)
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
+    {
+        let len = input.data.len();
+        utils::ensure_capacity(out, len);
+        let i_slice = &input.data;
+        let o_slice = out.as_mut_slice();
+        unsafe {
+            relu_avx2(i_slice.as_ptr(), o_slice.as_mut_ptr(), len);
+        }
+        TensorView {
+            data: Cow::Borrowed(out),
+            shape: Cow::Owned(input.shape.to_vec()),
+        }
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
         let len = input.data.len();
         utils::ensure_capacity(out, len);
@@ -495,11 +641,36 @@ pub fn relu<'a, 'b>(input: &TensorView<'b>, out: &'a mut Vec<f32>) -> TensorView
         }
     }
 }
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn relu_avx2(input: *const f32, output: *mut f32, len: usize) {
+    unsafe {
+        let zero = std::arch::x86_64::_mm256_setzero_ps();
+        let mut i = 0;
+        while i + 8 <= len {
+            let v = std::arch::x86_64::_mm256_loadu_ps(input.add(i));
+            let r = std::arch::x86_64::_mm256_max_ps(v, zero);
+            std::arch::x86_64::_mm256_storeu_ps(output.add(i), r);
+            i += 8;
+        }
+        while i < len {
+            let v = *input.add(i);
+            *output.add(i) = if v > 0.0 { v } else { 0.0 };
+            i += 1;
+        }
+    }
+}
 pub fn sqrt<'b, 'a>(input: &TensorView<'b>, out: &'a mut Vec<f32>) -> TensorView<'a> {
     let len = input.data.len();
     utils::ensure_capacity(out, len);
     let in_slice = &input.data;
     let out_slice = out.as_mut_slice();
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        sqrt_avx2(in_slice.as_ptr(), out_slice.as_mut_ptr(), len);
+    }
+    #[cfg(not(target_arch = "x86_64"))]
     for i in 0..len {
         unsafe {
             *out_slice.get_unchecked_mut(i) = in_slice.get_unchecked(i).sqrt();
@@ -508,6 +679,24 @@ pub fn sqrt<'b, 'a>(input: &TensorView<'b>, out: &'a mut Vec<f32>) -> TensorView
     TensorView {
         data: Cow::Borrowed(out),
         shape: std::borrow::Cow::Owned(input.shape.to_vec()),
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn sqrt_avx2(input: *const f32, output: *mut f32, len: usize) {
+    unsafe {
+        let mut i = 0;
+        while i + 8 <= len {
+            let v = std::arch::x86_64::_mm256_loadu_ps(input.add(i));
+            let r = std::arch::x86_64::_mm256_sqrt_ps(v);
+            std::arch::x86_64::_mm256_storeu_ps(output.add(i), r);
+            i += 8;
+        }
+        while i < len {
+            *output.add(i) = (*input.add(i)).sqrt();
+            i += 1;
+        }
     }
 }
 pub fn pow<'b, 'a, T: ElementOps>(

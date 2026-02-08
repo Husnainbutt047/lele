@@ -29,18 +29,15 @@ impl UnicodeProcessor {
         text_list: &[String],
         lang_list: &[String],
     ) -> Result<(Vec<Vec<i64>>, Vec<f32>, Vec<usize>)> {
-        println!("Debug: call input text_list len: {}", text_list.len());
         let mut processed_texts: Vec<String> = Vec::new();
         for (text, lang) in text_list.iter().zip(lang_list.iter()) {
             let processed = preprocess_text(text, lang)?;
-            println!("Debug: processed text: '{}'", processed);
             processed_texts.push(processed);
         }
 
         let mut text_ids: Vec<Vec<i64>> = Vec::new();
         for text in processed_texts {
             let mut ids = Vec::new();
-            println!("Debug: processing chars len: {}", text.chars().count());
             for char_val in text.chars() {
                 let idx = char_val as usize;
                 let mut token_id = 0;

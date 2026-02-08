@@ -144,8 +144,6 @@ impl<'a> SupertonicTts<'a> {
                 self.text_processor.call(&[chunk], &[lang.to_string()])?;
             let bsz = 1;
             let max_len = text_ids_vec[0].len();
-            println!("Debug: text_ids_vec[0] len: {}", max_len);
-            println!("Debug: text_ids_vec[0] content: {:?}", text_ids_vec[0]);
             let mut text_ids_i64 = vec![0i64; max_len];
             for (i, &id) in text_ids_vec[0].iter().enumerate() {
                 text_ids_i64[i] = id as i64;
@@ -163,20 +161,12 @@ impl<'a> SupertonicTts<'a> {
                 style_dp_tv,
                 text_mask_tv.clone(),
             );
-            println!("Debug: duration_tv shape: {:?}", duration_tv.shape);
-            println!("Debug: duration_tv data len: {}", duration_tv.data.len());
             let mut duration = duration_tv.data.to_vec();
-            println!("Debug: Num tokens: {}", duration.len());
-            println!(
-                "Debug: First 5 durations: {:?}",
-                duration.iter().take(5).collect::<Vec<_>>()
-            );
             for d in duration.iter_mut() {
                 *d /= speed;
             }
 
             let total_duration_seconds: f32 = duration.iter().sum();
-            println!("Debug: Total duration seconds: {}", total_duration_seconds);
             let duration_batch = vec![total_duration_seconds];
 
             // 2. Text Encoder

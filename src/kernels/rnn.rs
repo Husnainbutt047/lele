@@ -4,6 +4,75 @@ use faer::linalg::matmul::matmul;
 use faer::mat::{MatMut, MatRef};
 use faer::{Accum, Par};
 
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2", enable = "fma")]
+unsafe fn lstm_gates_avx2(
+    gates: &[f32],
+    out_c: &mut [f32],
+    out_h: &mut [f32],
+    out_y: &mut [f32],
+    hidden_size: usize,
+    t: usize,
+) {
+    use std::arch::x86_64::*;
+    unsafe {
+        let mut k = 0;
+        while k + 8 <= hidden_size {
+            // Compute sigmoid/tanh using exact scalar math to avoid
+            // recurrent error accumulation, then load results via SIMD
+            // for the gate arithmetic.
+            let mut i_buf = [0.0f32; 8];
+            let mut o_buf = [0.0f32; 8];
+            let mut f_buf = [0.0f32; 8];
+            let mut c_buf = [0.0f32; 8];
+
+            for j in 0..8 {
+                i_buf[j] = sigmoid(gates[k + j]);
+                o_buf[j] = sigmoid(gates[hidden_size + k + j]);
+                f_buf[j] = sigmoid(gates[2 * hidden_size + k + j]);
+                c_buf[j] = tanh(gates[3 * hidden_size + k + j]);
+            }
+
+            let i_gate = _mm256_loadu_ps(i_buf.as_ptr());
+            let o_gate = _mm256_loadu_ps(o_buf.as_ptr());
+            let f_gate = _mm256_loadu_ps(f_buf.as_ptr());
+            let c_gate = _mm256_loadu_ps(c_buf.as_ptr());
+
+            let prev_c = _mm256_loadu_ps(out_c.as_ptr().add(k));
+            // ct = f_gate * prev_c + i_gate * c_gate
+            let ct = _mm256_fmadd_ps(f_gate, prev_c, _mm256_mul_ps(i_gate, c_gate));
+
+            // ht = o_gate * tanh(ct) - compute tanh(ct) using exact scalar
+            let mut ct_buf = [0.0f32; 8];
+            _mm256_storeu_ps(ct_buf.as_mut_ptr(), ct);
+            let mut tanh_ct_buf = [0.0f32; 8];
+            for j in 0..8 {
+                tanh_ct_buf[j] = tanh(ct_buf[j]);
+            }
+            let tanh_ct = _mm256_loadu_ps(tanh_ct_buf.as_ptr());
+            let ht = _mm256_mul_ps(o_gate, tanh_ct);
+
+            _mm256_storeu_ps(out_c.as_mut_ptr().add(k), ct);
+            _mm256_storeu_ps(out_h.as_mut_ptr().add(k), ht);
+            _mm256_storeu_ps(out_y.as_mut_ptr().add(t * hidden_size + k), ht);
+
+            k += 8;
+        }
+        while k < hidden_size {
+            let i_gate = sigmoid(gates[k]);
+            let o_gate = sigmoid(gates[hidden_size + k]);
+            let f_gate = sigmoid(gates[2 * hidden_size + k]);
+            let c_gate = tanh(gates[3 * hidden_size + k]);
+            let ct = f_gate * out_c[k] + i_gate * c_gate;
+            let ht = o_gate * tanh(ct);
+            out_c[k] = ct;
+            out_h[k] = ht;
+            out_y[t * hidden_size + k] = ht;
+            k += 1;
+        }
+    }
+}
+
 pub fn lstm<'b, 'a>(
     input: &TensorView<'b>,
     w: &TensorView<'b>,
@@ -137,7 +206,14 @@ pub fn lstm<'b, 'a>(
             }
         }
 
-        #[cfg(not(target_arch = "aarch64"))]
+        #[cfg(target_arch = "x86_64")]
+        {
+            unsafe {
+                lstm_gates_avx2(&gates, out_c, out_h, out_y, hidden_size, t);
+            }
+        }
+
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
         for k in 0..hidden_size {
             let i_gate = sigmoid(gates[k]);
             let o_gate = sigmoid(gates[hidden_size + k]);

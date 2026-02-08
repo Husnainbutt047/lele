@@ -369,13 +369,25 @@ impl Compiler {
         if !self.constant_folding {
             return;
         }
-        let mut constants: HashMap<String, (Vec<f32>, Vec<usize>)> = HashMap::new();
-        // 1. Load initializers
+        let constants: HashMap<String, (Vec<f32>, Vec<usize>, i32)> = HashMap::new();
+        Self::fold_constants_graph(graph, &constants);
+    }
+
+    /// Core constant folding logic that works on any graph (top-level or subgraph).
+    /// `inherited_constants` contains constants from parent scope that subgraphs can reference.
+    /// Map value: (data_as_f32, shape, onnx_data_type)
+    fn fold_constants_graph(
+        graph: &mut GraphProto,
+        inherited_constants: &HashMap<String, (Vec<f32>, Vec<usize>, i32)>,
+    ) {
+        let mut constants: HashMap<String, (Vec<f32>, Vec<usize>, i32)> =
+            inherited_constants.clone();
+        // 1. Load initializers (override inherited if same name)
         for init in &graph.initializer {
             if let Ok((data, shape)) = tensor_to_array(init)
                 && !data.is_empty()
             {
-                constants.insert(init.name.clone(), (data, shape));
+                constants.insert(init.name.clone(), (data, shape, init.data_type));
             }
         }
         // 2. Load existing Constant nodes
@@ -386,7 +398,7 @@ impl Compiler {
                 && let Ok((data, shape)) = tensor_to_array(t)
                 && !data.is_empty()
             {
-                constants.insert(node.output[0].clone(), (data, shape));
+                constants.insert(node.output[0].clone(), (data, shape, t.data_type));
             }
         }
         let mut folded_indices = std::collections::HashSet::new();
@@ -406,170 +418,46 @@ impl Compiler {
             if !all_inputs_const || node.op_type == "Constant" {
                 continue;
             }
-            // Try folding common ops
-            let result = match node.op_type.as_str() {
-                "Shape" => {
-                    let (_, shape) = &constants[&node.input[0]];
-                    let data: Vec<f32> = shape.iter().map(|&s| s as f32).collect();
-                    let out_shape = vec![shape.len()];
-                    Some((data, out_shape))
-                }
-                "Unsqueeze" => {
-                    let axes = if node.input.len() > 1 {
-                        constants
-                            .get(&node.input[1])
-                            .map(|(d, _)| d.iter().map(|&x| x as i64).collect::<Vec<_>>())
-                    } else {
-                        node.attribute
-                            .iter()
-                            .find(|a| a.name == "axes")
-                            .map(|a| a.ints.clone())
-                    };
-                    if let Some(axes) = axes {
-                        let (data, shape) = &constants[&node.input[0]];
-                        let mut new_shape = shape.clone();
-                        let mut sorted_axes = axes.clone();
-                        sorted_axes.sort();
-                        for &ax in &sorted_axes {
-                            let idx = if ax < 0 {
-                                (new_shape.len() + 1) as i64 + ax
-                            } else {
-                                ax
-                            } as usize;
-                            if idx <= new_shape.len() {
-                                new_shape.insert(idx, 1);
-                            }
-                        }
-                        Some((data.clone(), new_shape))
-                    } else {
-                        None
-                    }
-                }
-                "Squeeze" => {
-                    let axes = if node.input.len() > 1 {
-                        constants
-                            .get(&node.input[1])
-                            .map(|(d, _)| d.iter().map(|&x| x as i64).collect::<Vec<_>>())
-                    } else {
-                        node.attribute
-                            .iter()
-                            .find(|a| a.name == "axes")
-                            .map(|a| a.ints.clone())
-                    };
-                    let (data, shape) = &constants[&node.input[0]];
-                    let mut new_shape = Vec::new();
-                    if let Some(axes) = axes {
-                        let axes_set: std::collections::HashSet<usize> = axes
-                            .iter()
-                            .map(|&a| {
-                                if a < 0 {
-                                    (shape.len() as i64 + a) as usize
-                                } else {
-                                    a as usize
-                                }
-                            })
-                            .collect();
-                        for (idx, &d) in shape.iter().enumerate() {
-                            if d != 1 || !axes_set.contains(&idx) {
-                                new_shape.push(d);
-                            }
-                        }
-                    } else {
-                        for &d in shape.iter() {
-                            if d != 1 {
-                                new_shape.push(d);
-                            }
-                        }
-                    }
-                    Some((data.clone(), new_shape))
-                }
-                "Concat" => {
-                    let axis_attr = node
-                        .attribute
-                        .iter()
-                        .find(|a| a.name == "axis")
-                        .map(|a| a.i)
-                        .unwrap_or(0);
-                    let mut all_data = Vec::new();
-                    let mut first_shape = None;
-                    let mut total_axis_dim = 0;
-                    for input in &node.input {
-                        let (data, shape) = &constants[input];
-                        let axis = if axis_attr < 0 {
-                            (shape.len() as i64 + axis_attr) as usize
-                        } else {
-                            axis_attr as usize
-                        };
-                        if first_shape.is_none() {
-                            first_shape = Some(shape.clone());
-                        }
-                        total_axis_dim += shape[axis];
-                        all_data.push((data, shape, axis));
-                    }
-                    if let Some(mut target_shape) = first_shape {
-                        let axis = all_data[0].2;
-                        target_shape[axis] = total_axis_dim;
-                        // Simple 1D/2D concat for shapes (usually Concat is used for shape tensors)
-                        if target_shape.len() == 1 {
-                            let mut merged = Vec::new();
-                            for (d, _, _) in all_data {
-                                merged.extend_from_slice(d);
-                            }
-                            Some((merged, target_shape))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }
-                "Cast" => {
-                    let (data, shape) = &constants[&node.input[0]];
-                    Some((data.clone(), shape.clone()))
-                }
-                "ConstantOfShape" => {
-                    let (data, _) = &constants[&node.input[0]];
-                    let val = node
-                        .attribute
-                        .iter()
-                        .find(|a| a.name == "value")
-                        .and_then(|a| a.t.as_ref())
-                        .and_then(|t| {
-                            if !t.float_data.is_empty() {
-                                Some(t.float_data[0])
-                            } else if !t.double_data.is_empty() {
-                                Some(t.double_data[0] as f32)
-                            } else if !t.int32_data.is_empty() {
-                                Some(t.int32_data[0] as f32)
-                            } else if !t.int64_data.is_empty() {
-                                Some(t.int64_data[0] as f32)
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(0.0);
-                    let shape: Vec<usize> = data.iter().map(|&x| x as usize).collect();
-                    let size: usize = shape.iter().product();
-                    let res_data = vec![val; size];
-                    Some((res_data, shape))
-                }
-                _ => None,
+            // Determine output data type: inherit from first input, unless op changes type
+            let input_dt = constants.get(&node.input[0]).map(|c| c.2).unwrap_or(1);
+            let out_dt = match node.op_type.as_str() {
+                "Shape" => 7, // Shape always outputs int64
+                "Cast" => node
+                    .attribute
+                    .iter()
+                    .find(|a| a.name == "to")
+                    .map(|a| a.i as i32)
+                    .unwrap_or(input_dt),
+                _ => input_dt, // Preserve input type for Slice, Concat, Unsqueeze, Squeeze, etc.
             };
+            // Try folding common ops
+            let result = Self::try_fold_op(node, &constants);
             if let Some((data, shape)) = result {
                 let out_name = &node.output[0];
-                constants.insert(out_name.clone(), (data.clone(), shape.clone()));
-                let new_init = TensorProto {
-                    name: out_name.clone(),
-                    dims: shape.iter().map(|&s| s as i64).collect(),
-                    data_type: 1, // FLOAT
-                    float_data: data,
-                    ..Default::default()
+                constants.insert(out_name.clone(), (data.clone(), shape.clone(), out_dt));
+                let new_init = if out_dt == 7 {
+                    // INT64: store as int64_data
+                    TensorProto {
+                        name: out_name.clone(),
+                        dims: shape.iter().map(|&s| s as i64).collect(),
+                        data_type: 7,
+                        int64_data: data.iter().map(|&x| x as i64).collect(),
+                        ..Default::default()
+                    }
+                } else {
+                    TensorProto {
+                        name: out_name.clone(),
+                        dims: shape.iter().map(|&s| s as i64).collect(),
+                        data_type: 1, // FLOAT
+                        float_data: data,
+                        ..Default::default()
+                    }
                 };
                 new_initializers.push(new_init);
                 folded_indices.insert(i);
             }
         }
-        // Apply
+        // Apply folded results
         if !folded_indices.is_empty() {
             graph.initializer.extend(new_initializers);
             let mut idx = 0;
@@ -578,6 +466,257 @@ impl Compiler {
                 idx += 1;
                 keep
             });
+        }
+        // 4. Recurse into subgraphs (If then_branch/else_branch, Loop body, etc.)
+        for node in graph.node.iter_mut() {
+            for attr in node.attribute.iter_mut() {
+                if let Some(ref mut subgraph) = attr.g {
+                    Self::fold_constants_graph(subgraph, &constants);
+                }
+                for subgraph in attr.graphs.iter_mut() {
+                    Self::fold_constants_graph(subgraph, &constants);
+                }
+            }
+        }
+    }
+
+    /// Try to fold a single node with all-constant inputs. Returns Some((data, shape)) on success.
+    fn try_fold_op(
+        node: &NodeProto,
+        constants: &HashMap<String, (Vec<f32>, Vec<usize>, i32)>,
+    ) -> Option<(Vec<f32>, Vec<usize>)> {
+        match node.op_type.as_str() {
+            "Shape" => {
+                let (_, shape, _) = &constants[&node.input[0]];
+                let data: Vec<f32> = shape.iter().map(|&s| s as f32).collect();
+                let out_shape = vec![shape.len()];
+                Some((data, out_shape))
+            }
+            "Unsqueeze" => {
+                let axes = if node.input.len() > 1 {
+                    constants
+                        .get(&node.input[1])
+                        .map(|(d, _, _)| d.iter().map(|&x| x as i64).collect::<Vec<_>>())
+                } else {
+                    node.attribute
+                        .iter()
+                        .find(|a| a.name == "axes")
+                        .map(|a| a.ints.clone())
+                };
+                if let Some(axes) = axes {
+                    let (data, shape, _) = &constants[&node.input[0]];
+                    let mut new_shape = shape.clone();
+                    let mut sorted_axes = axes.clone();
+                    sorted_axes.sort();
+                    for &ax in &sorted_axes {
+                        let idx = if ax < 0 {
+                            (new_shape.len() + 1) as i64 + ax
+                        } else {
+                            ax
+                        } as usize;
+                        if idx <= new_shape.len() {
+                            new_shape.insert(idx, 1);
+                        }
+                    }
+                    Some((data.clone(), new_shape))
+                } else {
+                    None
+                }
+            }
+            "Squeeze" => {
+                let axes = if node.input.len() > 1 {
+                    constants
+                        .get(&node.input[1])
+                        .map(|(d, _, _)| d.iter().map(|&x| x as i64).collect::<Vec<_>>())
+                } else {
+                    node.attribute
+                        .iter()
+                        .find(|a| a.name == "axes")
+                        .map(|a| a.ints.clone())
+                };
+                let (data, shape, _) = &constants[&node.input[0]];
+                let mut new_shape = Vec::new();
+                if let Some(axes) = axes {
+                    let axes_set: std::collections::HashSet<usize> = axes
+                        .iter()
+                        .map(|&a| {
+                            if a < 0 {
+                                (shape.len() as i64 + a) as usize
+                            } else {
+                                a as usize
+                            }
+                        })
+                        .collect();
+                    for (idx, &d) in shape.iter().enumerate() {
+                        if d != 1 || !axes_set.contains(&idx) {
+                            new_shape.push(d);
+                        }
+                    }
+                } else {
+                    for &d in shape.iter() {
+                        if d != 1 {
+                            new_shape.push(d);
+                        }
+                    }
+                }
+                Some((data.clone(), new_shape))
+            }
+            "Concat" => {
+                let axis_attr = node
+                    .attribute
+                    .iter()
+                    .find(|a| a.name == "axis")
+                    .map(|a| a.i)
+                    .unwrap_or(0);
+                let mut all_data = Vec::new();
+                let mut first_shape = None;
+                let mut total_axis_dim = 0;
+                for input in &node.input {
+                    let (data, shape, _) = &constants[input];
+                    let axis = if axis_attr < 0 {
+                        (shape.len() as i64 + axis_attr) as usize
+                    } else {
+                        axis_attr as usize
+                    };
+                    if first_shape.is_none() {
+                        first_shape = Some(shape.clone());
+                    }
+                    total_axis_dim += shape[axis];
+                    all_data.push((data, shape, axis));
+                }
+                if let Some(mut target_shape) = first_shape {
+                    let axis = all_data[0].2;
+                    target_shape[axis] = total_axis_dim;
+                    if target_shape.len() == 1 {
+                        // 1D concat: simple append
+                        let mut merged = Vec::new();
+                        for (d, _, _) in all_data {
+                            merged.extend_from_slice(d);
+                        }
+                        Some((merged, target_shape))
+                    } else if target_shape.len() == 2 && axis == 0 {
+                        // 2D concat along axis 0: append rows
+                        let mut merged = Vec::new();
+                        for (d, _, _) in &all_data {
+                            merged.extend_from_slice(d);
+                        }
+                        Some((merged, target_shape))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            "Slice" => {
+                // Fold Slice on constant tensors (supports 1D and 2D)
+                if node.input.len() >= 3 {
+                    let starts_const = constants.get(&node.input[1]);
+                    let ends_const = constants.get(&node.input[2]);
+                    let axes_const = if node.input.len() > 3 {
+                        constants.get(&node.input[3])
+                    } else {
+                        None
+                    };
+                    let (data, shape, _) = &constants[&node.input[0]];
+                    if let (Some((starts_d, _, _)), Some((ends_d, _, _))) =
+                        (starts_const, ends_const)
+                    {
+                        let ndim = shape.len();
+                        let num_slices = starts_d.len();
+                        // Determine axes
+                        let axes: Vec<usize> = if let Some((ax_d, _, _)) = axes_const {
+                            ax_d.iter()
+                                .map(|&v| {
+                                    let a = v as i64;
+                                    if a < 0 {
+                                        (ndim as i64 + a) as usize
+                                    } else {
+                                        a as usize
+                                    }
+                                })
+                                .collect()
+                        } else {
+                            (0..num_slices).collect()
+                        };
+                        // Build per-dimension start/end
+                        let mut dim_start = vec![0usize; ndim];
+                        let mut dim_end: Vec<usize> = shape.clone();
+                        for i in 0..num_slices {
+                            let ax = axes[i];
+                            let mut s = starts_d[i] as i64;
+                            let mut e = ends_d[i] as i64;
+                            let dim = shape[ax] as i64;
+                            if s < 0 {
+                                s += dim;
+                            }
+                            if e < 0 {
+                                e += dim;
+                            }
+                            s = s.max(0).min(dim);
+                            e = e.max(0).min(dim);
+                            dim_start[ax] = s as usize;
+                            dim_end[ax] = e as usize;
+                        }
+                        let out_shape: Vec<usize> =
+                            (0..ndim).map(|d| dim_end[d] - dim_start[d]).collect();
+                        let out_size: usize = out_shape.iter().product();
+                        if out_size > 0 && ndim <= 2 {
+                            let mut result = Vec::with_capacity(out_size);
+                            if ndim == 1 {
+                                result.extend_from_slice(&data[dim_start[0]..dim_end[0]]);
+                            } else {
+                                // 2D: data is row-major [rows, cols]
+                                let cols = shape[1];
+                                for row in dim_start[0]..dim_end[0] {
+                                    let row_offset = row * cols;
+                                    result.extend_from_slice(
+                                        &data[row_offset + dim_start[1]..row_offset + dim_end[1]],
+                                    );
+                                }
+                            }
+                            Some((result, out_shape))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            "Cast" => {
+                let (data, shape, _) = &constants[&node.input[0]];
+                Some((data.clone(), shape.clone()))
+            }
+            "ConstantOfShape" => {
+                let (data, _, _) = &constants[&node.input[0]];
+                let val = node
+                    .attribute
+                    .iter()
+                    .find(|a| a.name == "value")
+                    .and_then(|a| a.t.as_ref())
+                    .and_then(|t| {
+                        if !t.float_data.is_empty() {
+                            Some(t.float_data[0])
+                        } else if !t.double_data.is_empty() {
+                            Some(t.double_data[0] as f32)
+                        } else if !t.int32_data.is_empty() {
+                            Some(t.int32_data[0] as f32)
+                        } else if !t.int64_data.is_empty() {
+                            Some(t.int64_data[0] as f32)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0.0);
+                let shape: Vec<usize> = data.iter().map(|&x| x as usize).collect();
+                let size: usize = shape.iter().product();
+                let res_data = vec![val; size];
+                Some((res_data, shape))
+            }
+            _ => None,
         }
     }
 
