@@ -124,3 +124,104 @@ where
         self.0
     }
 }
+
+/// Helper functions for creating TensorView from byte slices
+impl<'a> TensorView<'a, f32> {
+    /// Create a TensorView<f32> from a byte slice, handling alignment
+    pub fn from_bytes_f32(bytes: &'a [u8], shape: &'a [usize]) -> Self {
+        // Ensure 4-byte alignment for f32
+        if bytes.as_ptr() as usize % 4 == 0 {
+            let f32_slice = unsafe { 
+                std::slice::from_raw_parts(bytes.as_ptr() as *const f32, bytes.len() / 4) 
+            };
+            TensorView::new(f32_slice, shape)
+        } else {
+            // Fallback for unaligned data
+            let mut f32_vec = Vec::with_capacity(bytes.len() / 4);
+            for chunk in bytes.chunks_exact(4) {
+                let bytes_arr: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];
+                f32_vec.push(f32::from_le_bytes(bytes_arr));
+            }
+            unsafe { std::mem::transmute(TensorView::from_owned(f32_vec, shape.to_vec())) }
+        }
+    }
+
+    /// Create a TensorView<f32> from u8 byte slice (cast each byte to f32)
+    pub fn from_bytes_u8(bytes: &[u8], shape: Vec<usize>) -> TensorView<'static, f32> {
+        let f32_vec: Vec<f32> = bytes.iter().map(|&x| x as f32).collect();
+        TensorView::from_owned(f32_vec, shape)
+    }
+
+    /// Create a TensorView<f32> from i8 byte slice (cast each byte to i8 then f32)
+    pub fn from_bytes_i8(bytes: &[u8], shape: Vec<usize>) -> TensorView<'static, f32> {
+        let f32_vec: Vec<f32> = bytes.iter().map(|&x| x as i8 as f32).collect();
+        TensorView::from_owned(f32_vec, shape)
+    }
+
+    /// Create a TensorView<f32> from f16 byte slice
+    pub fn from_bytes_f16(bytes: &[u8], shape: Vec<usize>) -> TensorView<'static, f32> {
+        let mut f16_vec = Vec::with_capacity(bytes.len() / 2);
+        for chunk in bytes.chunks_exact(2) {
+            let bytes_arr: [u8; 2] = [chunk[0], chunk[1]];
+            f16_vec.push(f16::from_bits(u16::from_le_bytes(bytes_arr)));
+        }
+        let f32_vec: Vec<f32> = f16_vec.iter().map(|&x| x.to_f32()).collect();
+        TensorView::from_owned(f32_vec, shape)
+    }
+
+    /// Create a TensorView<f32> from i64 byte slice (cast to f32)
+    pub fn from_bytes_i64_as_f32(bytes: &[u8], shape: Vec<usize>) -> TensorView<'static, f32> {
+        let mut i64_vec = Vec::with_capacity(bytes.len() / 8);
+        for chunk in bytes.chunks_exact(8) {
+            let bytes_arr: [u8; 8] = [chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7]];
+            i64_vec.push(i64::from_le_bytes(bytes_arr));
+        }
+        let f32_vec: Vec<f32> = i64_vec.iter().map(|&x| x as f32).collect();
+        TensorView::from_owned(f32_vec, shape)
+    }
+
+    /// Create a TensorView<f32> from i32 byte slice (cast to f32)
+    pub fn from_bytes_i32_as_f32(bytes: &[u8], shape: Vec<usize>) -> TensorView<'static, f32> {
+        let mut i32_vec = Vec::with_capacity(bytes.len() / 4);
+        for chunk in bytes.chunks_exact(4) {
+            let bytes_arr: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];
+            i32_vec.push(i32::from_le_bytes(bytes_arr));
+        }
+        let f32_vec: Vec<f32> = i32_vec.iter().map(|&x| x as f32).collect();
+        TensorView::from_owned(f32_vec, shape)
+    }
+}
+
+impl<'a> TensorView<'a, i64> {
+    /// Create a TensorView<i64> from byte slice
+    pub fn from_bytes_i64(bytes: &[u8], shape: Vec<usize>) -> TensorView<'static, i64> {
+        let mut i64_vec = Vec::with_capacity(bytes.len() / 8);
+        for chunk in bytes.chunks_exact(8) {
+            let bytes_arr: [u8; 8] = [chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7]];
+            i64_vec.push(i64::from_le_bytes(bytes_arr));
+        }
+        TensorView::from_owned(i64_vec, shape)
+    }
+
+    /// Create a TensorView<i64> from i32 byte slice (cast to i64)
+    pub fn from_bytes_i32_as_i64(bytes: &[u8], shape: Vec<usize>) -> TensorView<'static, i64> {
+        let mut i64_vec = Vec::with_capacity(bytes.len() / 4);
+        for chunk in bytes.chunks_exact(4) {
+            let bytes_arr: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];
+            i64_vec.push(i32::from_le_bytes(bytes_arr) as i64);
+        }
+        TensorView::from_owned(i64_vec, shape)
+    }
+}
+
+impl<'a> TensorView<'a, i32> {
+    /// Create a TensorView<i32> from byte slice
+    pub fn from_bytes_i32(bytes: &[u8], shape: Vec<usize>) -> TensorView<'static, i32> {
+        let mut i32_vec = Vec::with_capacity(bytes.len() / 4);
+        for chunk in bytes.chunks_exact(4) {
+            let bytes_arr: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];
+            i32_vec.push(i32::from_le_bytes(bytes_arr));
+        }
+        TensorView::from_owned(i32_vec, shape)
+    }
+}

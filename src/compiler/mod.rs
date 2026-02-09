@@ -925,39 +925,8 @@ impl Compiler {
         )?;
         writeln!(
             &mut code,
-            "        let slice = &self.data[offset..offset+len];"
+            "        TensorView::from_bytes_f32(&self.data[offset..offset+len], shape)"
         )?;
-        writeln!(&mut code, "        // Ensure 4-byte alignment for f32")?;
-        writeln!(&mut code, "        if slice.as_ptr() as usize % 4 == 0 {{")?;
-        writeln!(
-            &mut code,
-            "            let f32_slice = unsafe {{ std::slice::from_raw_parts(slice.as_ptr() as *const f32, slice.len() / 4) }};"
-        )?;
-        writeln!(&mut code, "            TensorView::new(f32_slice, shape)")?;
-        writeln!(&mut code, "        }} else {{")?;
-        writeln!(&mut code, "            // Fallback for unaligned data")?;
-        writeln!(
-            &mut code,
-            "            let mut f32_vec = Vec::with_capacity(slice.len() / 4);"
-        )?;
-        writeln!(
-            &mut code,
-            "            for chunk in slice.chunks_exact(4) {{"
-        )?;
-        writeln!(
-            &mut code,
-            "                let bytes: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];"
-        )?;
-        writeln!(
-            &mut code,
-            "                f32_vec.push(f32::from_le_bytes(bytes));"
-        )?;
-        writeln!(&mut code, "            }}")?;
-        writeln!(
-            &mut code,
-            "            unsafe {{ std::mem::transmute(TensorView::from_owned(f32_vec, shape.to_vec())) }}"
-        )?;
-        writeln!(&mut code, "        }}")?;
         writeln!(&mut code, "    }}")?;
 
         writeln!(
@@ -966,26 +935,7 @@ impl Compiler {
         )?;
         writeln!(
             &mut code,
-            "        let slice = &self.data[offset..offset+len];"
-        )?;
-        writeln!(
-            &mut code,
-            "        let mut i64_vec = Vec::with_capacity(slice.len() / 8);"
-        )?;
-        writeln!(&mut code, "        for chunk in slice.chunks_exact(8) {{")?;
-        writeln!(
-            &mut code,
-            "            let bytes: [u8; 8] = [chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7]];"
-        )?;
-        writeln!(
-            &mut code,
-            "            let val = i64::from_le_bytes(bytes);"
-        )?;
-        writeln!(&mut code, "            i64_vec.push(val);")?;
-        writeln!(&mut code, "        }}")?;
-        writeln!(
-            &mut code,
-            "        TensorView::from_owned(i64_vec, shape.to_vec())"
+            "        TensorView::from_bytes_i64(&self.data[offset..offset+len], shape.to_vec())"
         )?;
         writeln!(&mut code, "    }}")?;
 
@@ -995,25 +945,7 @@ impl Compiler {
         )?;
         writeln!(
             &mut code,
-            "        let slice = &self.data[offset..offset+len];"
-        )?;
-        writeln!(
-            &mut code,
-            "        let mut i64_vec = Vec::with_capacity(slice.len() / 4);"
-        )?;
-        writeln!(&mut code, "        for chunk in slice.chunks_exact(4) {{")?;
-        writeln!(
-            &mut code,
-            "            let bytes: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];"
-        )?;
-        writeln!(
-            &mut code,
-            "            i64_vec.push(i32::from_le_bytes(bytes) as i64);"
-        )?;
-        writeln!(&mut code, "        }}")?;
-        writeln!(
-            &mut code,
-            "        TensorView::from_owned(i64_vec, shape.to_vec())"
+            "        TensorView::from_bytes_i32_as_i64(&self.data[offset..offset+len], shape.to_vec())"
         )?;
         writeln!(&mut code, "    }}")?;
 
@@ -1023,25 +955,7 @@ impl Compiler {
         )?;
         writeln!(
             &mut code,
-            "        let slice = &self.data[offset..offset+len];"
-        )?;
-        writeln!(
-            &mut code,
-            "        let mut i32_vec = Vec::with_capacity(slice.len() / 4);"
-        )?;
-        writeln!(&mut code, "        for chunk in slice.chunks_exact(4) {{")?;
-        writeln!(
-            &mut code,
-            "            let bytes: [u8; 4] = [chunk[0], chunk[1], chunk[2], chunk[3]];"
-        )?;
-        writeln!(
-            &mut code,
-            "            i32_vec.push(i32::from_le_bytes(bytes));"
-        )?;
-        writeln!(&mut code, "        }}")?;
-        writeln!(
-            &mut code,
-            "        TensorView::from_owned(i32_vec, shape.to_vec())"
+            "        TensorView::from_bytes_i32(&self.data[offset..offset+len], shape.to_vec())"
         )?;
         writeln!(&mut code, "    }}")?;
 
@@ -1051,15 +965,7 @@ impl Compiler {
         )?;
         writeln!(
             &mut code,
-            "        let weight = self.weight_i64(offset, len, shape);"
-        )?;
-        writeln!(
-            &mut code,
-            "        let f32_vec: Vec<f32> = weight.data.iter().map(|&x| x as f32).collect();"
-        )?;
-        writeln!(
-            &mut code,
-            "        TensorView::from_owned(f32_vec, shape.to_vec())"
+            "        TensorView::from_bytes_i64_as_f32(&self.data[offset..offset+len], shape.to_vec())"
         )?;
         writeln!(&mut code, "    }}")?;
 
@@ -1069,15 +975,7 @@ impl Compiler {
         )?;
         writeln!(
             &mut code,
-            "        let weight = self.weight_i32(offset, len, shape);"
-        )?;
-        writeln!(
-            &mut code,
-            "        let f32_vec: Vec<f32> = weight.data.iter().map(|&x| x as f32).collect();"
-        )?;
-        writeln!(
-            &mut code,
-            "        TensorView::from_owned(f32_vec, shape.to_vec())"
+            "        TensorView::from_bytes_i32_as_f32(&self.data[offset..offset+len], shape.to_vec())"
         )?;
         writeln!(&mut code, "    }}")?;
 
@@ -1087,15 +985,7 @@ impl Compiler {
         )?;
         writeln!(
             &mut code,
-            "        let slice = &self.data[offset..offset+len];"
-        )?;
-        writeln!(
-            &mut code,
-            "        let f32_vec: Vec<f32> = slice.iter().map(|&x| x as f32).collect();"
-        )?;
-        writeln!(
-            &mut code,
-            "        TensorView::from_owned(f32_vec, shape.to_vec())"
+            "        TensorView::from_bytes_u8(&self.data[offset..offset+len], shape.to_vec())"
         )?;
         writeln!(&mut code, "    }}")?;
 
@@ -1105,15 +995,7 @@ impl Compiler {
         )?;
         writeln!(
             &mut code,
-            "        let slice = &self.data[offset..offset+len];"
-        )?;
-        writeln!(
-            &mut code,
-            "        let f32_vec: Vec<f32> = slice.iter().map(|&x| x as i8 as f32).collect();"
-        )?;
-        writeln!(
-            &mut code,
-            "        TensorView::from_owned(f32_vec, shape.to_vec())"
+            "        TensorView::from_bytes_i8(&self.data[offset..offset+len], shape.to_vec())"
         )?;
         writeln!(&mut code, "    }}")?;
 
@@ -1123,29 +1005,7 @@ impl Compiler {
         )?;
         writeln!(
             &mut code,
-            "        let slice = &self.data[offset..offset+len];"
-        )?;
-        writeln!(
-            &mut code,
-            "        let mut f16_vec = Vec::with_capacity(slice.len() / 2);"
-        )?;
-        writeln!(&mut code, "        for chunk in slice.chunks_exact(2) {{")?;
-        writeln!(
-            &mut code,
-            "            let bytes: [u8; 2] = [chunk[0], chunk[1]];"
-        )?;
-        writeln!(
-            &mut code,
-            "            f16_vec.push(lele::tensor::f16::from_bits(u16::from_le_bytes(bytes)));"
-        )?;
-        writeln!(&mut code, "        }}")?;
-        writeln!(
-            &mut code,
-            "        let f32_vec: Vec<f32> = f16_vec.iter().map(|&x| x.to_f32()).collect();"
-        )?;
-        writeln!(
-            &mut code,
-            "        TensorView::from_owned(f32_vec, shape.to_vec())"
+            "        TensorView::from_bytes_f16(&self.data[offset..offset+len], shape.to_vec())"
         )?;
         writeln!(&mut code, "    }}")?;
 
@@ -1307,6 +1167,14 @@ fn collect_weights(
 
         if let Ok((bytes, shape, data_type)) = crate::model::tensor_to_vec_u8(init) {
             if !bytes.is_empty() {
+                // Align to 16 bytes
+                let remainder = *current_offset % 16;
+                if remainder != 0 {
+                    let padding = 16 - remainder;
+                    bin_data.write_all(&vec![0u8; padding])?;
+                    *current_offset += padding;
+                }
+
                 bin_data.write_all(&bytes)?;
                 offset_map.push((
                     init.name.clone(),
@@ -1338,6 +1206,14 @@ fn collect_weights(
 
             if let Ok((bytes, shape, data_type)) = crate::model::tensor_to_vec_u8(t) {
                 if !bytes.is_empty() {
+                    // Align to 16 bytes
+                    let remainder = *current_offset % 16;
+                    if remainder != 0 {
+                        let padding = 16 - remainder;
+                        bin_data.write_all(&vec![0u8; padding])?;
+                        *current_offset += padding;
+                    }
+
                     bin_data.write_all(&bytes)?;
                     if let Some(out_name) = node.output.first() {
                         offset_map.push((
